@@ -209,6 +209,9 @@ __marimo__/
 # Project data and generated artifacts
 data/raw/
 data/frames/
+data/openttgames/
+data/annotations/openttgames/
+archive/openttgames/
 outputs/*
 !outputs/README.md
 models/checkpoints/

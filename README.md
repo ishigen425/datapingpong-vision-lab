@@ -38,6 +38,21 @@ Compare detector output against the imported legacy coordinate JSON:
 docker compose run --rm app python tasks/evaluate_ball_predictions/run.py
 ```
 
+Download and normalize OpenTTGames markup files only:
+
+```bash
+python3 tasks/import_openttgames/run.py
+```
+
+Detect bounce/hit-like events from ball coordinates without an end-to-end event model:
+
+```bash
+docker compose run --rm app python tasks/detect_events_from_ball/run.py
+docker compose run --rm app python tasks/evaluate_event_detection/run.py
+```
+
+The OpenTTGames dataset is licensed as CC BY-NC-SA 4.0, so keep downstream use non-commercial unless you have separate permission.
+
 The original large files are kept out of Git by `.gitignore`.
 
 ## Requirements
