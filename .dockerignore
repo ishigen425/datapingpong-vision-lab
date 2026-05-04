@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+data
+outputs
+archive
+legacy
+models/checkpoints
+*.mp4
+*.mov
+*.avi
+*.mkv

@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+    image: datapingpong-vision-lab:dev
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: python tasks/verify_torch/run.py
+    shm_size: "8gb"
+    tty: true
+    stdin_open: true
