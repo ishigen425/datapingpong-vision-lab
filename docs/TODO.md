@@ -2,27 +2,14 @@
 
 ## Docker Python Package Management
 
-Current Docker setup installs Python packages with:
+Resolved in the Dockerfile by copying the `uv` binary from `ghcr.io/astral-sh/uv`, creating `/opt/venv` with `--system-site-packages` so the official PyTorch image packages remain visible, and installing runtime dependencies with:
 
 ```bash
-python -m pip install --break-system-packages -r requirements.txt
+uv pip install --python /opt/venv/bin/python -r requirements.txt
 ```
 
-This was added because the current PyTorch base image marks the Python environment as externally managed.
+Follow-up options:
 
-Consider switching Docker package management to `uv`:
-
-- Avoid relying on `--break-system-packages`
-- Make dependency resolution and installation faster
-- Prepare for lockfile-based reproducible environments
-- Decide whether to keep `requirements.txt` or move to `pyproject.toml` + `uv.lock`
-
-Candidate direction:
-
-```dockerfile
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
-```
-
-Need to verify interaction with the official `pytorch/pytorch` Docker image before changing the default.
+- Move from `requirements.txt` to `pyproject.toml`
+- Add `uv.lock` for fully reproducible dependency resolution
+- Decide whether to move the Docker dependency source from `requirements.txt` to a project-level dependency table
