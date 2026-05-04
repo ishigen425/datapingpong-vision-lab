@@ -1,4 +1,0 @@
-opencv-python-headless>=4.9
-pandas>=2.2
-tqdm>=4.66
-pytest>=8.0

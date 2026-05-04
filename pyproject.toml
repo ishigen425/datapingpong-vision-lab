@@ -1,0 +1,15 @@
+[project]
+name = "datapingpong-vision-lab"
+version = "0.1.0"
+description = "Docker-based PyTorch workspace for table tennis vision experiments."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless>=4.9",
+    "pandas>=2.2",
+    "pytest>=8.0",
+    "tqdm>=4.66",
+]
+
+[tool.uv]
+package = false

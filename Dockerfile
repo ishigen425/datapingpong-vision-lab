@@ -21,9 +21,9 @@ RUN apt-get update \
         python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY pyproject.toml uv.lock ./
 RUN python -m venv --system-site-packages /opt/venv \
-    && uv pip install --python /opt/venv/bin/python -r requirements.txt
+    && uv sync --locked --active --inexact
 
 COPY src ./src
 COPY tasks ./tasks
