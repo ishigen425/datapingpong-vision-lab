@@ -51,6 +51,14 @@ docker compose run --rm app python tasks/detect_events_from_ball/run.py
 docker compose run --rm app python tasks/evaluate_event_detection/run.py
 ```
 
+Train and evaluate the lightweight coordinate-based event classifier:
+
+```bash
+docker compose run --rm app python tasks/train_event_classifier/run.py
+```
+
+Current event-detection experiment results are tracked in `docs/event_detection_experiments.md`.
+
 The OpenTTGames dataset is licensed as CC BY-NC-SA 4.0, so keep downstream use non-commercial unless you have separate permission.
 
 The original large files are kept out of Git by `.gitignore`.

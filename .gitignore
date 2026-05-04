@@ -215,6 +215,7 @@ archive/openttgames/
 outputs/*
 !outputs/README.md
 models/checkpoints/
+models/lightweight_events/
 *.mp4
 *.MP4
 *.mov
