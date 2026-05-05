@@ -203,6 +203,12 @@ docker compose run --rm app python tasks/train_rally_start_classifier/run.py \
   --proposals outputs/detect_rallies/DJI_0056_001_rally_proposals.json
 ```
 
+Extract independent per-hit stroke details from hit events, ball tracks, and pose features:
+
+```bash
+docker compose run --rm app python tasks/extract_stroke_details/run.py
+```
+
 ### Lightweight Event Classifier
 
 Train and evaluate the coordinate-window softmax regression classifier:
