@@ -2,6 +2,8 @@
 
 Table tennis vision workspace for separating ball tracking from event detection.
 
+The goal of this project is to turn raw table-tennis video into structured rally data: ball trajectories, bounce/hit events, rally boundaries, player pose features, and eventually richer shot descriptions such as forehand/backhand and spin tendencies. In other words, this is an AI workspace for converting match footage into machine-readable rally information that can later support analysis, indexing, visualization, and more advanced coaching or strategy tools.
+
 The current repository contains:
 
 - legacy PyTorch ball-tracking code imported from older notebook work
