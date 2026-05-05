@@ -65,3 +65,41 @@ def test_feature_text_lines_include_key_pose_values() -> None:
     assert "tilt=-12.3" in lines[1]
     assert "R_vel=(0.30, 0.40)" in lines[2]
     assert lines[3] == "[right] detected=1 vis=0.55"
+
+
+def test_active_rally_returns_current_segment() -> None:
+    rally = annotate_multimodal_run.active_rally(
+        [
+            {"id": 1, "start_frame": 10, "end_frame": 20, "duration_frames": 11, "event_counts": {"bounce": 1}},
+            {"id": 2, "start_frame": 30, "end_frame": 50, "duration_frames": 21, "event_counts": {"hit": 2}},
+        ],
+        35,
+    )
+
+    assert rally is not None
+    assert rally["id"] == 2
+
+
+def test_load_rallies_reads_payload_wrapper(tmp_path: Path) -> None:
+    path = tmp_path / "rallies.json"
+    path.write_text(
+        '{"rallies":[{"id":3,"start_frame":100,"end_frame":120,"duration_frames":21,"event_counts":{"bounce":2,"hit":1},"serve_like_start":true,"serve_like_score":0.42,"toss_like_start":true,"toss_rise_px":18.0,"toss_x_span_px":9.0}]}',
+        encoding="utf-8",
+    )
+
+    rallies = annotate_multimodal_run.load_rallies(path)
+
+    assert rallies == [
+        {
+            "id": 3,
+            "start_frame": 100,
+            "end_frame": 120,
+            "duration_frames": 21,
+            "event_counts": {"bounce": 2, "hit": 1},
+            "serve_like_start": True,
+            "serve_like_score": 0.42,
+            "toss_like_start": True,
+            "toss_rise_px": 18.0,
+            "toss_x_span_px": 9.0,
+        }
+    ]

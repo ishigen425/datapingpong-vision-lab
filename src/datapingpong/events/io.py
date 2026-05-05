@@ -44,13 +44,18 @@ def load_reference_events(path: Path) -> list[dict[str, Any]]:
 
     events: list[dict[str, Any]] = []
     if isinstance(rows, dict):
-        for key, value in rows.items():
-            if key.endswith("_frames") and isinstance(value, list):
-                event = key[: -len("_frames")]
-                events.extend({"event": event, "frame": int(frame), "item": "__default__"} for frame in value)
-            elif str(key).isdigit() and isinstance(value, str):
-                events.append({"event": _normalize_event(value), "frame": int(key), "item": "__default__"})
-        return sorted(events, key=lambda row: (row["frame"], row["event"]))
+        if isinstance(rows.get("predicted_events"), list):
+            rows = rows["predicted_events"]
+        elif isinstance(rows.get("events"), list):
+            rows = rows["events"]
+        else:
+            for key, value in rows.items():
+                if key.endswith("_frames") and isinstance(value, list):
+                    event = key[: -len("_frames")]
+                    events.extend({"event": event, "frame": int(frame), "item": "__default__"} for frame in value)
+                elif str(key).isdigit() and isinstance(value, str):
+                    events.append({"event": _normalize_event(value), "frame": int(key), "item": "__default__"})
+            return sorted(events, key=lambda row: (row["frame"], row["event"]))
 
     if isinstance(rows, list):
         for row in rows:

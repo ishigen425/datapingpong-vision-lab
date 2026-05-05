@@ -61,6 +61,7 @@ def main() -> int:
         type=Path,
         default=ROOT / "outputs/extract_pose_features/DJI_0056_001_pose_features.json",
     )
+    parser.add_argument("--rallies", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/annotate_multimodal_video/DJI_0056_001_multimodal.mp4")
     parser.add_argument(
         "--summary-output",
@@ -82,6 +83,7 @@ def main() -> int:
     events = load_events(args.events)
     pose_rows = {frame.frame: frame for frame in load_multi_pose_frames(args.pose)}
     pose_features = load_pose_features(args.pose_features)
+    rallies = load_rallies(args.rallies)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.summary_output.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +97,7 @@ def main() -> int:
         video_info,
         ball_rows=ball_rows,
         events=events,
+        rallies=rallies,
         pose_rows=pose_rows,
         pose_features=pose_features,
         trail_length=args.trail_length,
@@ -115,6 +118,7 @@ def main() -> int:
         "events": str(args.events),
         "pose": str(args.pose),
         "pose_features": str(args.pose_features),
+        "rallies": str(args.rallies) if args.rallies else None,
         "output": str(args.output),
         "video_codec": args.video_codec,
         "crf": args.crf,
@@ -126,6 +130,7 @@ def main() -> int:
         "max_frames": args.max_frames,
         "rendered_frames": rendered_frames,
         "event_counts": count_events(events),
+        "rally_count": len(rallies),
         "pose_detected_frames": sum(1 for frame in pose_rows.values() if frame.detected),
         "left_pose_frames": sum(1 for frame in pose_rows.values() if any(pose.role == "left" for pose in frame.poses)),
         "right_pose_frames": sum(1 for frame in pose_rows.values() if any(pose.role == "right" for pose in frame.poses)),
@@ -142,6 +147,7 @@ def render_video(
     *,
     ball_rows: dict[int, dict[str, float | bool | None]],
     events: list[dict[str, Any]],
+    rallies: list[dict[str, Any]],
     pose_rows: dict[int, Any],
     pose_features: dict[int, dict[str, Any]],
     trail_length: int,
@@ -188,7 +194,9 @@ def render_video(
         draw_ball_trail(frame, history)
         if ball_row is not None:
             draw_ball_marker(frame, point_from_ball_row(ball_row, video_info), ball_row)
-        draw_event_labels(frame, active_event_labels(events, frame_index, window=event_display_window))
+        active_labels = active_event_labels(events, frame_index, window=event_display_window)
+        draw_event_labels(frame, active_labels)
+        draw_rally_panel(frame, active_rally(rallies, frame_index), active_labels)
         pose_row = pose_rows.get(frame_index)
         if pose_row is not None:
             draw_pose(
@@ -273,6 +281,31 @@ def load_pose_features(path: Path) -> dict[int, dict[str, Any]]:
     return {int(row["frame"]): row for row in rows}
 
 
+def load_rallies(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload["rallies"] if isinstance(payload, dict) and "rallies" in payload else payload
+    return sorted(
+        [
+            {
+                "id": int(row["id"]),
+                "start_frame": int(row["start_frame"]),
+                "end_frame": int(row["end_frame"]),
+                "duration_frames": int(row.get("duration_frames", int(row["end_frame"]) - int(row["start_frame"]) + 1)),
+                "event_counts": dict(row.get("event_counts", {})),
+                "serve_like_start": bool(row.get("serve_like_start", False)),
+                "serve_like_score": float(row["serve_like_score"]) if row.get("serve_like_score") is not None else None,
+                "toss_like_start": bool(row.get("toss_like_start", False)),
+                "toss_rise_px": float(row["toss_rise_px"]) if row.get("toss_rise_px") is not None else None,
+                "toss_x_span_px": float(row["toss_x_span_px"]) if row.get("toss_x_span_px") is not None else None,
+            }
+            for row in rows
+        ],
+        key=lambda row: row["start_frame"],
+    )
+
+
 def point_from_ball_row(ball_row: dict[str, float | bool | None], video_info: dict[str, Any]) -> tuple[int, int] | None:
     if not ball_row["detected"] or ball_row["x"] is None or ball_row["y"] is None:
         return None
@@ -310,6 +343,13 @@ def active_event_labels(events: list[dict[str, Any]], frame: int, *, window: int
     return labels
 
 
+def active_rally(rallies: list[dict[str, Any]], frame: int) -> dict[str, Any] | None:
+    for rally in rallies:
+        if int(rally["start_frame"]) <= frame <= int(rally["end_frame"]):
+            return rally
+    return None
+
+
 def draw_event_labels(frame: Any, labels: list[str]) -> None:
     if not labels:
         return
@@ -322,6 +362,83 @@ def draw_event_labels(frame: Any, labels: list[str]) -> None:
         event_name = label.split()[0]
         color = (0, 215, 255) if event_name == "BOUNCE" else (50, 255, 50)
         cv2.putText(frame, label, (40, 48 + 26 * index), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2, cv2.LINE_AA)
+
+
+def draw_rally_panel(frame: Any, rally: dict[str, Any] | None, active_labels: list[str]) -> None:
+    height = frame.shape[0]
+    x0 = 20
+    y0 = height - 182
+    x1 = 420
+    y1 = height - 20
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (10, 10, 10), -1)
+    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0.0, frame)
+    if rally is None:
+        cv2.putText(frame, "Rally: none", (x0 + 16, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 180, 180), 2, cv2.LINE_AA)
+        return
+    counts = rally.get("event_counts", {})
+    bounce_count = int(counts.get("bounce", 0))
+    hit_count = int(counts.get("hit", 0))
+    cv2.putText(frame, f"Rally #{int(rally['id'])}", (x0 + 16, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(
+        frame,
+        f"range {int(rally['start_frame'])}-{int(rally['end_frame'])}  dur={int(rally['duration_frames'])}",
+        (x0 + 16, y0 + 56),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (220, 220, 220),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"events bounce={bounce_count} hit={hit_count}",
+        (x0 + 16, y0 + 84),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (220, 220, 220),
+        2,
+        cv2.LINE_AA,
+    )
+    serve_text = "yes" if rally.get("serve_like_start") else "no"
+    serve_score = rally.get("serve_like_score")
+    cv2.putText(
+        frame,
+        f"serve_like {serve_text}" + (f"  score={float(serve_score):.2f}" if serve_score is not None else ""),
+        (x0 + 16, y0 + 112),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (140, 220, 255) if rally.get("serve_like_start") else (180, 180, 180),
+        2,
+        cv2.LINE_AA,
+    )
+    toss_text = "yes" if rally.get("toss_like_start") else "no"
+    toss_rise = rally.get("toss_rise_px")
+    toss_x_span = rally.get("toss_x_span_px")
+    toss_suffix = ""
+    if toss_rise is not None and toss_x_span is not None:
+        toss_suffix = f"  rise={float(toss_rise):.0f} xspan={float(toss_x_span):.0f}"
+    cv2.putText(
+        frame,
+        f"toss_like {toss_text}{toss_suffix}",
+        (x0 + 16, y0 + 140),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (255, 200, 120) if rally.get("toss_like_start") else (180, 180, 180),
+        2,
+        cv2.LINE_AA,
+    )
+    current = ", ".join(label.split()[0] for label in active_labels) if active_labels else "-"
+    cv2.putText(
+        frame,
+        f"now {current}",
+        (x0 + 16, y0 + 168),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (100, 255, 100),
+        2,
+        cv2.LINE_AA,
+    )
 
 
 def draw_pose(frame: Any, pose_row: Any, *, min_visibility: float, min_presence: float) -> None:

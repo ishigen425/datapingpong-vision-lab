@@ -172,6 +172,37 @@ Evaluate predicted event frames:
 docker compose run --rm app python tasks/evaluate_event_detection/run.py
 ```
 
+### Rally Detection
+
+Segment the match into rally frame ranges from ball visibility and bounce/hit events:
+
+```bash
+docker compose run --rm app python tasks/detect_rallies/run.py \
+  --continuation-gap -1
+```
+
+For the imported local DJI legacy ball JSON, the task defaults to the known `+4` frame shift. Use `--ball-frame-offset 0` when feeding newer detector outputs such as the belief-tracker JSON.
+
+Export kept and rejected rally-start proposals with diagnostics for review and labeling:
+
+```bash
+docker compose run --rm app python tasks/export_rally_proposals/run.py
+```
+
+After adding labels to the proposal JSON, evaluate the current rule-based decision first:
+
+```bash
+docker compose run --rm app python tasks/evaluate_rally_proposals/run.py \
+  --proposals outputs/detect_rallies/DJI_0056_001_rally_proposals.json
+```
+
+Train a lightweight classifier once proposal labels have been added:
+
+```bash
+docker compose run --rm app python tasks/train_rally_start_classifier/run.py \
+  --proposals outputs/detect_rallies/DJI_0056_001_rally_proposals.json
+```
+
 ### Lightweight Event Classifier
 
 Train and evaluate the coordinate-window softmax regression classifier:
@@ -245,6 +276,8 @@ Render ball trajectory, bounce/hit events, pose landmarks, and pose feature valu
 ```bash
 docker compose run --rm app python tasks/annotate_multimodal_video/run.py
 ```
+
+Pass `--rallies outputs/detect_rallies/<name>.json` to also show the current rally number, rally frame range, and rally-level event counts while the video plays.
 
 ## Useful Commands
 
