@@ -25,6 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Render BOUND! text near softmax-predicted bounce frames.")
     parser.add_argument("--video", type=Path, default=ROOT / "data/raw/DJI_0056_001-001.MP4")
     parser.add_argument("--ball", type=Path, default=ROOT / "data/annotations/ball_tracking/DJI_0056_001_predictions.json")
+    parser.add_argument("--ball-frame-offset", type=int, default=0, help="Integer frame shift applied to input ball coordinates.")
     parser.add_argument("--model", type=Path, default=ROOT / "models/lightweight_events/openttgames_softmax.json")
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/annotate_bounce_video/DJI_0056_001_bound.mp4")
     parser.add_argument("--events-output", type=Path, default=ROOT / "outputs/annotate_bounce_video/bounce_events.json")
@@ -47,7 +48,7 @@ def main() -> int:
     model = SoftmaxRegression.from_dict(json.loads(args.model.read_text(encoding="utf-8")))
     table_geometry = load_table_geometry(args.table_geometry)
     model_table_geometry = table_geometry if "table_x" in model.feature_names else None
-    groups = load_ball_point_groups(args.ball, confidence_threshold=0.5)
+    groups = load_ball_point_groups(args.ball, confidence_threshold=0.5, frame_offset=args.ball_frame_offset)
     if len(groups) != 1:
         raise ValueError(f"Expected one coordinate group for {args.ball}, got {len(groups)}.")
     item, points = next(iter(groups.items()))
@@ -66,7 +67,7 @@ def main() -> int:
         table_geometry=model_table_geometry,
     )
     bounce_class_index = model.classes.index("bounce")
-    probabilities = model.predict_proba(table.features)[:, bounce_class_index]
+    probabilities = model.predict_proba(features_for_model(table.feature_names, table.features, model.feature_names))[:, bounce_class_index]
     probabilities = apply_spatial_prior(
         table.frames,
         probabilities,
@@ -110,6 +111,7 @@ def main() -> int:
                 "table_geometry": str(args.table_geometry) if args.table_geometry else None,
                 "table_margin": args.table_margin,
                 "model_uses_table_geometry": model_table_geometry is not None,
+                "ball_frame_offset": args.ball_frame_offset,
                 "ball_frame_width": ball_frame_width,
                 "ball_frame_height": ball_frame_height,
                 "video_codec": args.video_codec,
@@ -164,6 +166,16 @@ def nms(candidates: list[tuple[int, float]], window: int) -> list[tuple[int, flo
         if all(abs(frame - selected_frame) > window for selected_frame, _ in selected):
             selected.append((frame, probability))
     return sorted(selected)
+
+
+def features_for_model(feature_names: list[str], features: Any, model_feature_names: list[str]) -> Any:
+    if feature_names == model_feature_names:
+        return features
+    feature_index = {name: index for index, name in enumerate(feature_names)}
+    missing = [name for name in model_feature_names if name not in feature_index]
+    if missing:
+        raise ValueError(f"Feature table is missing model features: {missing}")
+    return features[:, [feature_index[name] for name in model_feature_names]]
 
 
 def apply_spatial_prior(

@@ -35,6 +35,11 @@ class EventPeak:
     probability: float
     x: float | None
     y: float | None
+    local_x_span: float | None = None
+    local_y_span: float | None = None
+    local_detections: int | None = None
+    local_before_x_displacement: float | None = None
+    local_after_x_displacement: float | None = None
 
 
 def score_trajectory(
@@ -84,6 +89,8 @@ def score_trajectory(
     for index, point in enumerate(ordered):
         track_quality = _track_quality(detected, confidences, index)
         y_flip = _y_velocity_flip_score(velocities, index)
+        x_flip = _x_velocity_flip_score(velocities, index, speed_scale)
+        x_delta = _x_velocity_delta_score(velocities, index, speed_scale)
         angle_score = _ratio((turn_angles[index] or 0.0), 70.0)
         accel_score = _ratio((accelerations[index] or 0.0), accel_scale * 2.0)
         speed_score = _ratio((speeds[index] or 0.0), speed_scale * 1.5)
@@ -101,10 +108,12 @@ def score_trajectory(
         hit = _clamp01(
             track_quality
             * (
-                0.44 * angle_score
-                + 0.28 * accel_score
-                + 0.18 * speed_score
-                + 0.10 * missing_edge
+                0.46 * x_flip
+                + 0.22 * x_delta
+                + 0.16 * angle_score
+                + 0.10 * accel_score
+                + 0.04 * speed_score
+                + 0.02 * missing_edge
             )
         )
 
@@ -248,6 +257,31 @@ def _y_velocity_flip_score(velocities: list[tuple[float, float] | None], index: 
         return 0.0
     strength = min(abs(before_y), abs(after_y))
     return _ratio(strength, 1.2)
+
+
+def _x_velocity_flip_score(velocities: list[tuple[float, float] | None], index: int, speed_scale: float) -> float:
+    if index <= 0 or index >= len(velocities) - 1:
+        return 0.0
+    before = velocities[index - 1]
+    after = velocities[index + 1]
+    if before is None or after is None:
+        return 0.0
+    before_x = before[0]
+    after_x = after[0]
+    if before_x == 0.0 or after_x == 0.0 or before_x * after_x >= 0.0:
+        return 0.0
+    strength = min(abs(before_x), abs(after_x))
+    return _ratio(strength, speed_scale * 0.55)
+
+
+def _x_velocity_delta_score(velocities: list[tuple[float, float] | None], index: int, speed_scale: float) -> float:
+    if index <= 0 or index >= len(velocities) - 1:
+        return 0.0
+    before = velocities[index - 1]
+    after = velocities[index + 1]
+    if before is None or after is None:
+        return 0.0
+    return _ratio(abs(after[0] - before[0]), speed_scale * 1.2)
 
 
 def _track_quality(detected: list[bool], confidences: list[float], index: int, radius: int = 2) -> float:

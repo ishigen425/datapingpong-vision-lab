@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument(
         "--frame-offset",
         type=int,
-        default=-8,
+        default=-4,
         help="Reference frame offset applied as reference_frame = prediction_frame + frame_offset.",
     )
     args = parser.parse_args()

@@ -6,7 +6,7 @@ Compares `tasks/detect_ball_legacy` output against the imported legacy coordinat
 docker compose run --rm app python tasks/evaluate_ball_predictions/run.py
 ```
 
-By default this compares `reference_frame = prediction_frame - 8`, matching the imported legacy 9-frame-window output.
+By default this compares `reference_frame = prediction_frame - 4`, matching the corrected center-frame indexing of the 9-frame legacy detector against the imported legacy coordinate JSON.
 
 Outputs:
 

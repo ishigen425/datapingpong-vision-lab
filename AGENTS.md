@@ -27,6 +27,19 @@ docker compose build
 docker compose -f compose.yaml -f compose.gpu.yaml run --rm app <command>
 ```
 
+### GPU Video Encoding With ffmpeg
+
+Use the GPU compose override and pass `h264_nvenc` to task scripts that expose `--video-codec`:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml run --rm app \
+  python tasks/annotate_events_video/run.py \
+  --events outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json \
+  --video-codec h264_nvenc
+```
+
+The task writes large ignored artifacts under `outputs/`. If NVENC is unavailable on the host, rerun the same task without the GPU override and use `--video-codec libx264`.
+
 ## Data And Artifact Rules
 
 Do not commit large or generated files.

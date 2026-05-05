@@ -22,6 +22,10 @@ This document records the current coordinate-only event detection results so lat
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | Rule baseline | local `DJI_0056_001` | bounce | 0.426 | 0.510 | 0.464 | `tasks/detect_events_from_ball`, threshold 0.35 |
 | Rule baseline | local `DJI_0056_001` | hit | 0.369 | 0.369 | 0.369 | threshold 0.65 |
+| X-flip rule + table gate | local `DJI_0056_001` | bounce | 0.819 | 0.671 | 0.738 | `smooth_window=3`, NMS 3, hit threshold 0.45 |
+| X-flip rule + table gate | local `DJI_0056_001` | hit | 0.390 | 0.574 | 0.464 | Main cue is horizontal velocity reversal |
+| X-flip + table-prior hit rule | local `DJI_0056_001` | bounce | 0.805 | 0.695 | 0.746 | Separate hit smoothing, table prior, arbitration window 4 |
+| X-flip + table-prior hit rule | local `DJI_0056_001` | hit | 0.384 | 0.602 | 0.469 | Main cue is horizontal velocity reversal; recall improved |
 | Softmax + table gate | local `DJI_0056_001` | bounce | 0.675 | 0.675 | 0.675 | OpenTTGames softmax, center prior, manual table polygon, threshold 0.5 |
 | Rule baseline | OpenTTGames all items | bounce | 0.606 | 0.878 | 0.717 | Coordinate-only rule detector, no training |
 | Softmax regression | OpenTTGames game/test | bounce | 0.915 | 0.983 | 0.948 | 39 scale-normalized coordinate-window features |
@@ -82,6 +86,60 @@ docker compose run --rm app python tasks/evaluate_event_detection/run.py \
   --events bounce
 ```
 
+Local DJI x-velocity-flip hit rule:
+
+```bash
+docker compose run --rm app python tasks/detect_events_from_ball/run.py \
+  --input data/annotations/ball_tracking/DJI_0056_001_predictions.json \
+  --output outputs/detect_events_from_ball/local_table_xflip_hit_events.json \
+  --table-geometry data/annotations/table_geometry/DJI_0056_001.json \
+  --bounce-threshold 0.35 \
+  --hit-threshold 0.45 \
+  --smooth-window 3 \
+  --nms-window 3 \
+  --hit-suppression-window 0
+
+docker compose run --rm app python tasks/evaluate_event_detection/run.py \
+  --reference data/annotations/events/bounce_and_hit_frames.json \
+  --predictions outputs/detect_events_from_ball/local_table_xflip_hit_events.json \
+  --summary outputs/evaluate_event_detection/local_table_xflip_hit_summary.json \
+  --events bounce hit
+```
+
+Local DJI table-prior hit/bounce render:
+
+```bash
+docker compose run --rm app python tasks/detect_events_from_ball/run.py \
+  --input data/annotations/ball_tracking/DJI_0056_001_predictions.json \
+  --output outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json \
+  --table-geometry data/annotations/table_geometry/DJI_0056_001.json \
+  --bounce-threshold 0.35 \
+  --hit-threshold 0.55 \
+  --smooth-window 3 \
+  --hit-smooth-window 7 \
+  --nms-window 3 \
+  --arbitration-window 4 \
+  --hit-local-window 6 \
+  --hit-min-local-x-span 30 \
+  --hit-min-local-y-span 10 \
+  --hit-min-local-detections 4
+
+docker compose run --rm app python tasks/evaluate_event_detection/run.py \
+  --reference data/annotations/events/bounce_and_hit_frames.json \
+  --predictions outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json \
+  --summary outputs/evaluate_event_detection/local_table_prior_motion_x30_y10_summary.json \
+  --events bounce hit
+
+docker compose -f compose.yaml -f compose.gpu.yaml run --rm app \
+  python tasks/annotate_events_video/run.py \
+  --events outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json \
+  --video-codec h264_nvenc \
+  --output outputs/annotate_events_video/DJI_0056_001_events_table_motion_x30_y10_nvenc.mp4 \
+  --subtitle-output outputs/annotate_events_video/events_table_motion_x30_y10_nvenc.ass
+```
+
+Compared with the unfiltered table-prior hit run, the balanced `x30/y10` local-motion gate reduces predicted hits from `391` to `249`. Hit precision improves from `0.384` to `0.550`; hit recall drops from `0.602` to `0.550`; hit F1 improves from `0.469` to `0.550`. The stricter `x40/y10` setting improves hit precision to `0.579` but makes hit labels too sparse by visual inspection. The optional `--hit-min-directional-x-displacement 8` check is currently too strict on this sample (`hit F1 0.341`).
+
 Default ML settings:
 
 - model: numpy softmax regression with standardization
@@ -115,6 +173,9 @@ For now, `empty` should be treated as a separate non-contact/segment label rathe
 - The rule baseline is useful for sanity checks, but not practical as a final detector.
 - The lightweight ML bounce detector is already materially better than rules on the OpenTTGames game/test split.
 - Adding a hand-measured table polygon and applying it after scaling local ball coordinates from `640x360` to the `1920x1080` video frame improves local DJI bounce F1 from `0.464` to `0.675`.
+- Explicit horizontal velocity reversal improves local DJI hit F1 from `0.369` to `0.464`, but precision is still weak because several non-racket trajectory changes produce similar x-flips.
+- The table-prior hit rule uses separate smoothing for bounce (`3`) and hit (`7`), boosts hit candidates near/outside table edges, and arbitrates close bounce/hit conflicts by table zone. It improves local hit recall to `0.602` and hit F1 to `0.469`.
+- Adding a local-motion quality gate around hit candidates is useful for poor ball visibility and non-rally sections. Requiring a `+-6` frame local span of at least `30px` in x, `10px` in y, and `4` detected points balances the local DJI hit count at `249` predictions and improves hit F1 to `0.550`.
 - Visual inspection of the table-gated render looked close to 80% usable, but remaining false positives/negatives still need threshold and table-relative model work.
 - The net_hit detector needs stricter precision work before practical use. The next candidates are class-specific thresholds, richer trajectory features around net-hit candidates, and a held-out threshold sweep.
 - The reported ML numbers are OpenTTGames-only and should not be interpreted as racket-hit performance on the local DJI annotation, because OpenTTGames labels do not include the same `hit` class.

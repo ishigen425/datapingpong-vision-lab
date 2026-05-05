@@ -7,8 +7,8 @@ from typing import Any
 from .trajectory import BallPoint, EventPeak, EventProbabilities
 
 
-def load_ball_points(path: Path, *, confidence_threshold: float = 0.5) -> list[BallPoint]:
-    groups = load_ball_point_groups(path, confidence_threshold=confidence_threshold)
+def load_ball_points(path: Path, *, confidence_threshold: float = 0.5, frame_offset: int = 0) -> list[BallPoint]:
+    groups = load_ball_point_groups(path, confidence_threshold=confidence_threshold, frame_offset=frame_offset)
     if len(groups) == 1:
         return next(iter(groups.values()))
     points: list[BallPoint] = []
@@ -17,22 +17,22 @@ def load_ball_points(path: Path, *, confidence_threshold: float = 0.5) -> list[B
     return sorted(points, key=lambda point: point.frame)
 
 
-def load_ball_point_groups(path: Path, *, confidence_threshold: float = 0.5) -> dict[str, list[BallPoint]]:
+def load_ball_point_groups(path: Path, *, confidence_threshold: float = 0.5, frame_offset: int = 0) -> dict[str, list[BallPoint]]:
     if path.suffix == ".jsonl":
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         groups: dict[str, list[BallPoint]] = {}
         for index, row in enumerate(rows):
             item = str(row.get("item", "__default__"))
-            groups.setdefault(item, []).append(_row_to_ball_point(row, index, confidence_threshold))
+            groups.setdefault(item, []).append(_row_to_ball_point(row, index, confidence_threshold, frame_offset=frame_offset))
         return {item: sorted(points, key=lambda point: point.frame) for item, points in groups.items()}
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, dict) and "predictions" in payload:
-        return {"__default__": [_row_to_ball_point(row, index, confidence_threshold) for index, row in enumerate(payload["predictions"])]}
+        return {"__default__": [_row_to_ball_point(row, index, confidence_threshold, frame_offset=frame_offset) for index, row in enumerate(payload["predictions"])]}
     if isinstance(payload, list):
-        return {"__default__": [_row_to_ball_point(row, index, confidence_threshold) for index, row in enumerate(payload)]}
+        return {"__default__": [_row_to_ball_point(row, index, confidence_threshold, frame_offset=frame_offset) for index, row in enumerate(payload)]}
     if isinstance(payload, dict):
-        return {"__default__": [_mapping_item_to_ball_point(frame, row, confidence_threshold) for frame, row in payload.items()]}
+        return {"__default__": [_mapping_item_to_ball_point(frame, row, confidence_threshold, frame_offset=frame_offset) for frame, row in payload.items()]}
     raise ValueError(f"Unsupported ball input format: {path}")
 
 
@@ -80,20 +80,31 @@ def probabilities_to_dicts(rows: list[EventProbabilities]) -> list[dict[str, Any
 
 
 def peaks_to_dicts(peaks: list[EventPeak]) -> list[dict[str, Any]]:
-    return [
-        {
+    rows = []
+    for peak in peaks:
+        row = {
             "event": peak.event,
             "frame": peak.frame,
             "probability": peak.probability,
             "x": peak.x,
             "y": peak.y,
         }
-        for peak in peaks
-    ]
+        for key in (
+            "local_x_span",
+            "local_y_span",
+            "local_detections",
+            "local_before_x_displacement",
+            "local_after_x_displacement",
+        ):
+            value = getattr(peak, key)
+            if value is not None:
+                row[key] = value
+        rows.append(row)
+    return rows
 
 
-def _row_to_ball_point(row: dict[str, Any], index: int, confidence_threshold: float) -> BallPoint:
-    frame = int(row.get("frame", index))
+def _row_to_ball_point(row: dict[str, Any], index: int, confidence_threshold: float, *, frame_offset: int = 0) -> BallPoint:
+    frame = int(row.get("frame", index)) + frame_offset
     confidence = float(row.get("confidence", row.get("prod", 1.0)))
     x = row.get("x")
     y = row.get("y")
@@ -109,11 +120,11 @@ def _row_to_ball_point(row: dict[str, Any], index: int, confidence_threshold: fl
     return BallPoint(frame=frame, x=x if detected else None, y=y if detected else None, confidence=confidence, detected=detected)
 
 
-def _mapping_item_to_ball_point(frame: str, row: Any, confidence_threshold: float) -> BallPoint:
+def _mapping_item_to_ball_point(frame: str, row: Any, confidence_threshold: float, *, frame_offset: int = 0) -> BallPoint:
     if not isinstance(row, dict):
         raise ValueError(f"Expected coordinate mapping for frame {frame}, got {type(row).__name__}")
     payload = {"frame": int(frame), **row}
-    return _row_to_ball_point(payload, int(frame), confidence_threshold)
+    return _row_to_ball_point(payload, int(frame), confidence_threshold, frame_offset=frame_offset)
 
 
 def _normalize_event(event: str) -> str:

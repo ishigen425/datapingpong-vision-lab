@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
+import cv2
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from datapingpong.events.io import load_ball_point_groups
+from datapingpong.pose import load_multi_pose_frames, visible_landmark
+
+
+POSE_CONNECTIONS = (
+    ("left_shoulder", "right_shoulder"),
+    ("left_shoulder", "left_elbow"),
+    ("left_elbow", "left_wrist"),
+    ("right_shoulder", "right_elbow"),
+    ("right_elbow", "right_wrist"),
+    ("left_shoulder", "left_hip"),
+    ("right_shoulder", "right_hip"),
+    ("left_hip", "right_hip"),
+)
+
+POSE_POINTS = (
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+)
+
+POSE_ROLE_COLORS = {
+    "left": (255, 120, 0),
+    "right": (255, 0, 180),
+}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Render ball, bounce/hit events, and pose outputs into one video.")
+    parser.add_argument("--video", type=Path, default=ROOT / "data/raw/DJI_0056_001-001.MP4")
+    parser.add_argument("--ball", type=Path, default=ROOT / "data/annotations/ball_tracking/DJI_0056_001_predictions.json")
+    parser.add_argument("--ball-frame-offset", type=int, default=0, help="Integer frame shift applied to input ball coordinates.")
+    parser.add_argument(
+        "--events",
+        type=Path,
+        default=ROOT / "outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json",
+    )
+    parser.add_argument("--pose", type=Path, default=ROOT / "outputs/estimate_pose/DJI_0056_001_pose.json")
+    parser.add_argument(
+        "--pose-features",
+        type=Path,
+        default=ROOT / "outputs/extract_pose_features/DJI_0056_001_pose_features.json",
+    )
+    parser.add_argument("--output", type=Path, default=ROOT / "outputs/annotate_multimodal_video/DJI_0056_001_multimodal.mp4")
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        default=ROOT / "outputs/annotate_multimodal_video/DJI_0056_001_multimodal_summary.json",
+    )
+    parser.add_argument("--trail-length", type=int, default=12, help="How many recent detected ball points to show.")
+    parser.add_argument("--event-display-window", type=int, default=4, help="Frames before/after each event label is shown.")
+    parser.add_argument("--pose-min-visibility", type=float, default=0.5)
+    parser.add_argument("--pose-min-presence", type=float, default=0.0)
+    parser.add_argument("--start-frame", type=int, default=0)
+    parser.add_argument("--max-frames", type=int, default=0, help="Use 0 to render the whole video.")
+    parser.add_argument("--video-codec", choices=["libx264", "h264_nvenc"], default="libx264")
+    parser.add_argument("--crf", type=int, default=20)
+    args = parser.parse_args()
+
+    video_info = read_video_info(args.video)
+    ball_rows = load_ball_rows(args.ball, video_info, frame_offset=args.ball_frame_offset)
+    events = load_events(args.events)
+    pose_rows = {frame.frame: frame for frame in load_multi_pose_frames(args.pose)}
+    pose_features = load_pose_features(args.pose_features)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.summary_output.parent.mkdir(parents=True, exist_ok=True)
+    temp_output = args.output.with_suffix(".tmp.mp4")
+    if temp_output.exists():
+        temp_output.unlink()
+
+    render_video(
+        args.video,
+        temp_output,
+        video_info,
+        ball_rows=ball_rows,
+        events=events,
+        pose_rows=pose_rows,
+        pose_features=pose_features,
+        trail_length=args.trail_length,
+        event_display_window=args.event_display_window,
+        pose_min_visibility=args.pose_min_visibility,
+        pose_min_presence=args.pose_min_presence,
+        start_frame=args.start_frame,
+        max_frames=args.max_frames,
+    )
+    transcode_video(temp_output, args.video, args.output, codec=args.video_codec, crf=args.crf)
+    temp_output.unlink(missing_ok=True)
+
+    rendered_frames = resolve_rendered_frame_count(video_info["frames"], start_frame=args.start_frame, max_frames=args.max_frames)
+    summary = {
+        "video": str(args.video),
+        "ball": str(args.ball),
+        "ball_frame_offset": args.ball_frame_offset,
+        "events": str(args.events),
+        "pose": str(args.pose),
+        "pose_features": str(args.pose_features),
+        "output": str(args.output),
+        "video_codec": args.video_codec,
+        "crf": args.crf,
+        "trail_length": args.trail_length,
+        "event_display_window": args.event_display_window,
+        "pose_min_visibility": args.pose_min_visibility,
+        "pose_min_presence": args.pose_min_presence,
+        "start_frame": args.start_frame,
+        "max_frames": args.max_frames,
+        "rendered_frames": rendered_frames,
+        "event_counts": count_events(events),
+        "pose_detected_frames": sum(1 for frame in pose_rows.values() if frame.detected),
+        "left_pose_frames": sum(1 for frame in pose_rows.values() if any(pose.role == "left" for pose in frame.poses)),
+        "right_pose_frames": sum(1 for frame in pose_rows.values() if any(pose.role == "right" for pose in frame.poses)),
+    }
+    args.summary_output.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def render_video(
+    input_video: Path,
+    output_video: Path,
+    video_info: dict[str, Any],
+    *,
+    ball_rows: dict[int, dict[str, float | bool | None]],
+    events: list[dict[str, Any]],
+    pose_rows: dict[int, Any],
+    pose_features: dict[int, dict[str, Any]],
+    trail_length: int,
+    event_display_window: int,
+    pose_min_visibility: float,
+    pose_min_presence: float,
+    start_frame: int,
+    max_frames: int,
+) -> None:
+    capture = cv2.VideoCapture(str(input_video))
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Could not open video: {input_video}")
+    if start_frame > 0:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    writer = cv2.VideoWriter(
+        str(output_video),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        float(video_info["fps"]),
+        (int(video_info["width"]), int(video_info["height"])),
+    )
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open output video writer: {output_video}")
+
+    frame_index = start_frame - 1
+    history: list[tuple[int, int]] = []
+    rendered = 0
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        frame_index += 1
+        if max_frames > 0 and rendered >= max_frames:
+            break
+        rendered += 1
+
+        ball_row = ball_rows.get(frame_index)
+        if ball_row is not None:
+            point = point_from_ball_row(ball_row, video_info)
+            if point is not None:
+                history.append(point)
+        history = history[-trail_length:]
+
+        draw_ball_trail(frame, history)
+        if ball_row is not None:
+            draw_ball_marker(frame, point_from_ball_row(ball_row, video_info), ball_row)
+        draw_event_labels(frame, active_event_labels(events, frame_index, window=event_display_window))
+        pose_row = pose_rows.get(frame_index)
+        if pose_row is not None:
+            draw_pose(
+                frame,
+                pose_row,
+                min_visibility=pose_min_visibility,
+                min_presence=pose_min_presence,
+            )
+        feature_row = pose_features.get(frame_index)
+        if feature_row is not None:
+            draw_pose_feature_panel(frame, feature_text_lines(feature_row))
+        draw_frame_counter(frame, frame_index)
+        writer.write(frame)
+
+    writer.release()
+    capture.release()
+
+
+def read_video_info(path: Path) -> dict[str, Any]:
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        raise FileNotFoundError(f"Could not open video: {path}")
+    fps = float(capture.get(cv2.CAP_PROP_FPS))
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    capture.release()
+    if fps <= 0.0:
+        raise ValueError(f"Could not read FPS from {path}")
+    return {"fps": fps, "width": width, "height": height, "frames": frames}
+
+
+def load_ball_rows(path: Path, video_info: dict[str, Any], *, frame_offset: int = 0) -> dict[int, dict[str, float | bool | None]]:
+    groups = load_ball_point_groups(path, confidence_threshold=0.0, frame_offset=frame_offset)
+    if len(groups) != 1:
+        raise ValueError(f"Expected one coordinate group for {path}, got {len(groups)}.")
+    _, points = next(iter(groups.items()))
+    scale_width, scale_height = resolve_ball_frame_size(points, video_info)
+    rows: dict[int, dict[str, float | bool | None]] = {}
+    for point in points:
+        rows[point.frame] = {
+            "x": float(point.x) if point.x is not None else None,
+            "y": float(point.y) if point.y is not None else None,
+            "detected": bool(point.detected),
+            "confidence": float(point.confidence),
+            "input_width": scale_width,
+            "input_height": scale_height,
+        }
+    return rows
+
+
+def resolve_ball_frame_size(points: list[Any], video_info: dict[str, Any]) -> tuple[float, float]:
+    max_x = max(float(point.x or 0.0) for point in points)
+    max_y = max(float(point.y or 0.0) for point in points)
+    video_width = float(video_info["width"])
+    video_height = float(video_info["height"])
+    if max_x <= video_width / 2.0 + 2.0 and max_y <= video_height / 2.0 + 2.0:
+        return video_width / 3.0, video_height / 3.0
+    return video_width, video_height
+
+
+def load_events(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload["predicted_events"] if isinstance(payload, dict) and "predicted_events" in payload else payload
+    return sorted(
+        [
+            {
+                "event": str(row["event"]),
+                "frame": int(row["frame"]),
+                "probability": float(row.get("probability", 0.0)),
+            }
+            for row in rows
+            if row.get("event") in {"bounce", "hit"}
+        ],
+        key=lambda row: (row["frame"], row["event"]),
+    )
+
+
+def load_pose_features(path: Path) -> dict[int, dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload["frames"] if isinstance(payload, dict) and "frames" in payload else payload
+    return {int(row["frame"]): row for row in rows}
+
+
+def point_from_ball_row(ball_row: dict[str, float | bool | None], video_info: dict[str, Any]) -> tuple[int, int] | None:
+    if not ball_row["detected"] or ball_row["x"] is None or ball_row["y"] is None:
+        return None
+    x = int(round(float(ball_row["x"]) * float(video_info["width"]) / float(ball_row["input_width"])))
+    y = int(round(float(ball_row["y"]) * float(video_info["height"]) / float(ball_row["input_height"])))
+    return x, y
+
+
+def draw_ball_trail(frame: Any, history: list[tuple[int, int]]) -> None:
+    if len(history) < 2:
+        return
+    for index in range(1, len(history)):
+        start = history[index - 1]
+        end = history[index]
+        thickness = max(1, int(round(1 + 3 * index / len(history))))
+        color = (0, min(255, 80 + 12 * index), 255)
+        cv2.line(frame, start, end, color, thickness, cv2.LINE_AA)
+
+
+def draw_ball_marker(frame: Any, point: tuple[int, int] | None, ball_row: dict[str, float | bool | None]) -> None:
+    if point is None:
+        return
+    cv2.circle(frame, point, 6, (0, 220, 255), 2, cv2.LINE_AA)
+    cv2.circle(frame, point, 2, (255, 255, 255), -1, cv2.LINE_AA)
+    label = f"ball {float(ball_row['confidence']):.2f}"
+    cv2.putText(frame, label, (point[0] + 8, point[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def active_event_labels(events: list[dict[str, Any]], frame: int, *, window: int) -> list[str]:
+    labels = []
+    for event in events:
+        delta = abs(int(event["frame"]) - frame)
+        if delta <= window:
+            labels.append(f"{str(event['event']).upper()} f={int(event['frame'])} p={float(event['probability']):.2f}")
+    return labels
+
+
+def draw_event_labels(frame: Any, labels: list[str]) -> None:
+    if not labels:
+        return
+    height, width = frame.shape[:2]
+    overlay = frame.copy()
+    panel_height = 26 * len(labels) + 18
+    cv2.rectangle(overlay, (20, 20), (width - 20, 20 + panel_height), (20, 20, 20), -1)
+    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0.0, frame)
+    for index, label in enumerate(labels):
+        event_name = label.split()[0]
+        color = (0, 215, 255) if event_name == "BOUNCE" else (50, 255, 50)
+        cv2.putText(frame, label, (40, 48 + 26 * index), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2, cv2.LINE_AA)
+
+
+def draw_pose(frame: Any, pose_row: Any, *, min_visibility: float, min_presence: float) -> None:
+    for pose in pose_row.poses:
+        color = POSE_ROLE_COLORS.get(pose.role, (200, 200, 0))
+        for start_name, end_name in POSE_CONNECTIONS:
+            start = visible_landmark(pose, start_name, min_visibility=min_visibility, min_presence=min_presence)
+            end = visible_landmark(pose, end_name, min_visibility=min_visibility, min_presence=min_presence)
+            start_point = scale_pose_point(start, frame)
+            end_point = scale_pose_point(end, frame)
+            if start_point is None or end_point is None:
+                continue
+            cv2.line(frame, start_point, end_point, color, 2, cv2.LINE_AA)
+        label_point = None
+        for name in POSE_POINTS:
+            landmark = visible_landmark(pose, name, min_visibility=min_visibility, min_presence=min_presence)
+            point = scale_pose_point(landmark, frame)
+            if point is None:
+                continue
+            if label_point is None:
+                label_point = point
+            cv2.circle(frame, point, 4, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(frame, point, 6, color, 1, cv2.LINE_AA)
+        if label_point is not None:
+            cv2.putText(frame, pose.role, (label_point[0] + 8, label_point[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+
+
+def scale_pose_point(landmark: Any, frame: Any) -> tuple[int, int] | None:
+    if landmark is None or landmark.x is None or landmark.y is None:
+        return None
+    height, width = frame.shape[:2]
+    x = int(round(float(landmark.x) * width))
+    y = int(round(float(landmark.y) * height))
+    return x, y
+
+
+def feature_text_lines(row: dict[str, Any]) -> list[str]:
+    players = row.get("players", {})
+    lines: list[str] = []
+    for role in ("left", "right"):
+        player = players.get(role, {})
+        lines.extend(
+            [
+                f"[{role}] detected={float(player.get('pose_detected', 0.0)):.0f} vis={float(player.get('upper_body_visible_ratio', 0.0)):.2f}",
+                f"  tilt={float(player.get('torso_tilt_degrees', 0.0)):.1f} L_elbow={float(player.get('left_elbow_angle_degrees', 0.0)):.1f} R_elbow={float(player.get('right_elbow_angle_degrees', 0.0)):.1f}",
+                f"  L_vel=({float(player.get('left_wrist_velocity_x', 0.0)):.2f}, {float(player.get('left_wrist_velocity_y', 0.0)):.2f}) R_vel=({float(player.get('right_wrist_velocity_x', 0.0)):.2f}, {float(player.get('right_wrist_velocity_y', 0.0)):.2f})",
+            ]
+        )
+    return lines
+
+
+def draw_pose_feature_panel(frame: Any, lines: list[str]) -> None:
+    if not lines:
+        return
+    height, width = frame.shape[:2]
+    panel_width = min(760, width - 40)
+    line_height = 22
+    panel_height = 28 + line_height * len(lines)
+    x0 = width - panel_width - 20
+    y0 = 20
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + panel_width, y0 + panel_height), (8, 8, 8), -1)
+    cv2.addWeighted(overlay, 0.5, frame, 0.5, 0.0, frame)
+    cv2.putText(frame, "Pose features", (x0 + 14, y0 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+    for index, line in enumerate(lines):
+        cv2.putText(frame, line, (x0 + 14, y0 + 48 + index * line_height), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+
+
+def draw_frame_counter(frame: Any, frame_index: int) -> None:
+    height = frame.shape[0]
+    cv2.putText(frame, f"frame {frame_index}", (24, height - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+
+
+def transcode_video(temp_video: Path, source_video: Path, output_video: Path, *, codec: str, crf: int) -> None:
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(temp_video),
+        "-i",
+        str(source_video),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a?",
+        "-c:v",
+        codec,
+    ]
+    if codec == "h264_nvenc":
+        command.extend(["-preset", "p4", "-b:v", "0", "-cq:v", str(crf)])
+    else:
+        command.extend(["-preset", "medium", "-crf", str(crf)])
+    command.extend(["-c:a", "copy", "-shortest", str(output_video)])
+    subprocess.run(command, check=True)
+
+
+def count_events(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for event in events:
+        name = str(event["event"])
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def resolve_rendered_frame_count(total_frames: int, *, start_frame: int, max_frames: int) -> int:
+    remaining = max(0, total_frames - start_frame)
+    if max_frames > 0:
+        return min(remaining, max_frames)
+    return remaining
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

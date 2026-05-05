@@ -7,6 +7,7 @@ The current repository contains:
 - legacy PyTorch ball-tracking code imported from older notebook work
 - coordinate-only rule-based event detection
 - lightweight softmax-regression event classification from ball trajectories
+- MediaPipe-based pose estimation plus body-relative pose feature extraction
 - OpenTTGames markup import/normalization utilities
 - evaluation tasks for ball coordinates and event frames
 - video rendering utilities for visual inspection
@@ -26,6 +27,8 @@ Key results so far:
 | Rule baseline | local DJI annotation | bounce | 0.426 | 0.510 | 0.464 |
 | Rule baseline | local DJI annotation | hit | 0.369 | 0.369 | 0.369 |
 | Softmax + table gate | local DJI annotation | bounce | 0.675 | 0.675 | 0.675 |
+| Table-prior + local motion rule | local DJI annotation | bounce | 0.796 | 0.708 | 0.749 |
+| Table-prior + local motion rule | local DJI annotation | hit | 0.550 | 0.550 | 0.550 |
 | Rule baseline | OpenTTGames all items | bounce | 0.606 | 0.878 | 0.717 |
 | Softmax regression | OpenTTGames game/test | bounce | 0.915 | 0.983 | 0.948 |
 | Softmax regression | OpenTTGames game/test | net_hit | 0.388 | 0.967 | 0.553 |
@@ -138,6 +141,8 @@ Run the imported DL ball detector on the sample video:
 docker compose run --rm app python tasks/detect_ball_legacy/run.py --max-frames 20
 ```
 
+The legacy detector now defaults to a belief-heatmap temporal decoder that keeps a 2D location belief, carries motion and gravity forward, and then corrects that belief with each new UNet heatmap. Use `--decoder track` for the older top-k point tracker or `--decoder argmax` for the raw per-frame baseline.
+
 Compare detector output against the imported coordinate JSON:
 
 ```bash
@@ -158,6 +163,8 @@ Optionally gate bounce candidates to a hand-annotated table polygon:
 docker compose run --rm app python tasks/detect_events_from_ball/run.py \
   --table-geometry data/annotations/table_geometry/<video>.json
 ```
+
+For the local DJI sample, `--hit-min-local-x-span 30 --hit-min-local-y-span 10 --hit-min-local-detections 4` is the current balanced hit setting. A stricter x span improves precision but makes hit labels too sparse.
 
 Evaluate predicted event frames:
 
@@ -183,6 +190,26 @@ Default training split:
 
 The default excludes `empty` because the first multiclass check was unstable. See [docs/event_detection_experiments.md](docs/event_detection_experiments.md).
 
+### Pose Estimation And Pose Features
+
+Run MediaPipe Pose on the local sample video:
+
+```bash
+docker compose run --rm app python tasks/estimate_pose/run.py
+```
+
+Then convert the pose JSON into body-relative per-frame features:
+
+```bash
+docker compose run --rm app python tasks/extract_pose_features/run.py
+```
+
+The first pose run downloads the default MediaPipe pose landmarker bundle into the ignored `models/checkpoints/mediapipe/` directory if it is not already present. The current pose workflow assigns up to two detected players per frame as `left` and `right`, which matches the side-view local sample better than `near/far`.
+
+The pose workflow is intentionally separate from the existing ball/event pipeline so pose can be fused later for hit timing or stroke classification without replacing the coordinate-first event detector.
+
+For the imported local DJI legacy ball JSON, use a `+4` frame shift (`--input-frame-offset 4` or `--ball-frame-offset 4`) because the original 9-frame detector output is early relative to the center frame.
+
 ### Render Bounce Debug Video
 
 Render `Bound!` around softmax-predicted bounce frames in the local DJI sample:
@@ -192,6 +219,15 @@ docker compose run --rm app python tasks/annotate_bounce_video/run.py
 ```
 
 When `--table-geometry` is provided, rendering filters predicted bounces to the table region. Models trained with table-relative features also consume those features automatically.
+
+Render both `BOUND!` and `HIT!` labels from a predicted events JSON:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml run --rm app \
+  python tasks/annotate_events_video/run.py \
+  --events outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json \
+  --video-codec h264_nvenc
+```
 
 Default outputs:
 
@@ -203,6 +239,12 @@ outputs/annotate_bounce_video/bounce_eval_summary.json
 ```
 
 This is a debug visualization. The OpenTTGames-trained softmax bounce model currently transfers poorly to the local DJI sample.
+
+Render ball trajectory, bounce/hit events, pose landmarks, and pose feature values together:
+
+```bash
+docker compose run --rm app python tasks/annotate_multimodal_video/run.py
+```
 
 ## Useful Commands
 

@@ -129,12 +129,15 @@ def _velocity_features(
     vy_wide_after_norm = vy_wide_after / frame_height
     speed_before = math.hypot(vx_before_norm, vy_before_norm)
     speed_after = math.hypot(vx_after_norm, vy_after_norm)
+    x_flip = 1.0 if vx_before != 0.0 and vx_after != 0.0 and vx_before * vx_after < 0.0 else 0.0
     y_flip = 1.0 if vy_before > 0.0 and vy_after < 0.0 else 0.0
     return [
         vx_before_norm,
         vy_before_norm,
         vx_after_norm,
         vy_after_norm,
+        abs(vx_after_norm - vx_before_norm),
+        x_flip,
         vx_wide_before_norm,
         vy_wide_before_norm,
         vx_wide_after_norm,
@@ -174,6 +177,8 @@ def _feature_names(offsets: tuple[int, ...], *, include_table: bool = False) -> 
             "vy_before",
             "vx_after",
             "vy_after",
+            "vx_delta_abs",
+            "x_flip",
             "vx_wide_before",
             "vy_wide_before",
             "vx_wide_after",

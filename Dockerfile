@@ -13,14 +13,17 @@ WORKDIR /workspace
 COPY --from=uv /uv /usr/local/bin/uv
 COPY --from=uv /uvx /usr/local/bin/uvx
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://security.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
         git \
         ffmpeg \
+        libegl1 \
         libgl1 \
-        libglib2.0-0 \
-        python3.12-venv \
-    && rm -rf /var/lib/apt/lists/*
+        libgles2 \
+         libglib2.0-0 \
+         python3.12-venv \
+     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
 RUN python -m venv --system-site-packages /opt/venv \
