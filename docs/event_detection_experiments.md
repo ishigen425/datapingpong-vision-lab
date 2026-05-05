@@ -22,10 +22,11 @@ This document records the current coordinate-only event detection results so lat
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | Rule baseline | local `DJI_0056_001` | bounce | 0.426 | 0.510 | 0.464 | `tasks/detect_events_from_ball`, threshold 0.35 |
 | Rule baseline | local `DJI_0056_001` | hit | 0.369 | 0.369 | 0.369 | threshold 0.65 |
+| Softmax + table gate | local `DJI_0056_001` | bounce | 0.675 | 0.675 | 0.675 | OpenTTGames softmax, center prior, manual table polygon, threshold 0.5 |
 | Rule baseline | OpenTTGames all items | bounce | 0.606 | 0.878 | 0.717 | Coordinate-only rule detector, no training |
-| Softmax regression | OpenTTGames game/test | bounce | 0.915 | 0.983 | 0.948 | 39 coordinate-window features |
-| Softmax regression | OpenTTGames game/test | net_hit | 0.385 | 0.961 | 0.550 | Recall is high, false positives are still high |
-| Softmax regression | OpenTTGames game/test | micro avg for bounce/net_hit | 0.579 | 0.974 | 0.726 | Current best lightweight ML run |
+| Softmax regression | OpenTTGames game/test | bounce | 0.915 | 0.983 | 0.948 | 39 scale-normalized coordinate-window features |
+| Softmax regression | OpenTTGames game/test | net_hit | 0.388 | 0.967 | 0.553 | Recall is high, false positives are still high |
+| Softmax regression | OpenTTGames game/test | micro avg for bounce/net_hit | 0.580 | 0.976 | 0.728 | Current best lightweight ML run |
 
 ## Commands
 
@@ -62,11 +63,32 @@ Lightweight ML current best run:
 docker compose run --rm app python tasks/train_event_classifier/run.py
 ```
 
+Local DJI table-gated debug render with GPU video encode:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml run --rm app \
+  python tasks/annotate_bounce_video/run.py \
+  --table-geometry data/annotations/table_geometry/DJI_0056_001.json \
+  --threshold 0.5 \
+  --video-codec h264_nvenc \
+  --output outputs/annotate_bounce_video/DJI_0056_001_bound_table_nvenc.mp4 \
+  --events-output outputs/annotate_bounce_video/bounce_events_table_nvenc.json \
+  --subtitle-output outputs/annotate_bounce_video/bounce_events_table_nvenc.ass
+
+docker compose run --rm app python tasks/evaluate_event_detection/run.py \
+  --reference data/annotations/events/bounce_and_hit_frames.json \
+  --predictions outputs/annotate_bounce_video/bounce_events_table_nvenc.json \
+  --summary outputs/annotate_bounce_video/bounce_eval_table_nvenc_summary.json \
+  --events bounce
+```
+
 Default ML settings:
 
 - model: numpy softmax regression with standardization
 - labels: `none`, `bounce`, `net_hit`
-- features: 39 coordinate-window and kinematic features
+- features: 39 coordinate-window and kinematic features normalized by frame size
+- frame size: `1280x720`
+- optional table geometry: hand-annotated corner JSON adds 7 table-relative features and can gate bounce candidates to the table region
 - threshold: `0.35`
 - positive radius: `+-2` frames
 - negative margin: `12` frames
@@ -92,5 +114,7 @@ For now, `empty` should be treated as a separate non-contact/segment label rathe
 
 - The rule baseline is useful for sanity checks, but not practical as a final detector.
 - The lightweight ML bounce detector is already materially better than rules on the OpenTTGames game/test split.
+- Adding a hand-measured table polygon and applying it after scaling local ball coordinates from `640x360` to the `1920x1080` video frame improves local DJI bounce F1 from `0.464` to `0.675`.
+- Visual inspection of the table-gated render looked close to 80% usable, but remaining false positives/negatives still need threshold and table-relative model work.
 - The net_hit detector needs stricter precision work before practical use. The next candidates are class-specific thresholds, richer trajectory features around net-hit candidates, and a held-out threshold sweep.
 - The reported ML numbers are OpenTTGames-only and should not be interpreted as racket-hit performance on the local DJI annotation, because OpenTTGames labels do not include the same `hit` class.

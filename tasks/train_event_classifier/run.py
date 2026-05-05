@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "tasks/evaluate_event_detection"))
 from datapingpong.events.features import build_feature_table
 from datapingpong.events.io import load_ball_point_groups, load_reference_events
 from datapingpong.events.ml import SoftmaxRegression
+from datapingpong.events.table import load_table_geometry
 from run import summarize
 
 
@@ -38,6 +39,9 @@ def main() -> int:
     parser.add_argument("--positive-radius", type=int, default=2)
     parser.add_argument("--negative-margin", type=int, default=12)
     parser.add_argument("--negative-ratio", type=float, default=1.5)
+    parser.add_argument("--frame-width", type=float, default=1280.0)
+    parser.add_argument("--frame-height", type=float, default=720.0)
+    parser.add_argument("--table-geometry", type=Path, default=None, help="Optional JSON with table corner annotations.")
     parser.add_argument("--epochs", type=int, default=700)
     parser.add_argument("--learning-rate", type=float, default=0.08)
     parser.add_argument("--l2", type=float, default=0.001)
@@ -49,8 +53,18 @@ def main() -> int:
 
     groups = load_ball_point_groups(args.ball, confidence_threshold=0.0)
     events = load_reference_events(args.events)
+    table_geometry = load_table_geometry(args.table_geometry)
     event_by_item = group_events(events, allowed_classes=set(args.classes) - {"none"})
-    feature_tables = {item: build_feature_table(item, points) for item, points in groups.items()}
+    feature_tables = {
+        item: build_feature_table(
+            item,
+            points,
+            frame_width=args.frame_width,
+            frame_height=args.frame_height,
+            table_geometry=table_geometry,
+        )
+        for item, points in groups.items()
+    }
 
     x_train, y_train, feature_names = build_training_matrix(
         feature_tables,
@@ -84,6 +98,9 @@ def main() -> int:
             "classes": args.classes,
             "training_rows": int(x_train.shape[0]),
             "feature_count": int(x_train.shape[1]),
+            "frame_width": args.frame_width,
+            "frame_height": args.frame_height,
+            "table_geometry": str(args.table_geometry) if args.table_geometry else None,
             "threshold": args.threshold,
             "nms_window": args.nms_window,
         }

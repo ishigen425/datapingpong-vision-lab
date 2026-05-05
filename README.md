@@ -25,10 +25,11 @@ Key results so far:
 | --- | --- | --- | ---: | ---: | ---: |
 | Rule baseline | local DJI annotation | bounce | 0.426 | 0.510 | 0.464 |
 | Rule baseline | local DJI annotation | hit | 0.369 | 0.369 | 0.369 |
+| Softmax + table gate | local DJI annotation | bounce | 0.675 | 0.675 | 0.675 |
 | Rule baseline | OpenTTGames all items | bounce | 0.606 | 0.878 | 0.717 |
 | Softmax regression | OpenTTGames game/test | bounce | 0.915 | 0.983 | 0.948 |
-| Softmax regression | OpenTTGames game/test | net_hit | 0.385 | 0.961 | 0.550 |
-| Softmax regression | OpenTTGames game/test | bounce/net_hit micro avg | 0.579 | 0.974 | 0.726 |
+| Softmax regression | OpenTTGames game/test | net_hit | 0.388 | 0.967 | 0.553 |
+| Softmax regression | OpenTTGames game/test | bounce/net_hit micro avg | 0.580 | 0.976 | 0.728 |
 
 Important caveat: OpenTTGames labels `bounce`, `net_hit`, and `empty`; it does not directly match the local DJI `hit` label. The OpenTTGames softmax model performs poorly when applied directly to the local DJI video, so that path should be treated as visualization/debugging rather than a reliable detector.
 
@@ -151,6 +152,13 @@ Detect bounce/hit-like events from coordinates:
 docker compose run --rm app python tasks/detect_events_from_ball/run.py
 ```
 
+Optionally gate bounce candidates to a hand-annotated table polygon:
+
+```bash
+docker compose run --rm app python tasks/detect_events_from_ball/run.py \
+  --table-geometry data/annotations/table_geometry/<video>.json
+```
+
 Evaluate predicted event frames:
 
 ```bash
@@ -164,6 +172,8 @@ Train and evaluate the coordinate-window softmax regression classifier:
 ```bash
 docker compose run --rm app python tasks/train_event_classifier/run.py
 ```
+
+Pass `--table-geometry` to add table-relative features such as normalized table position, inside/outside state, edge margin, and net distance.
 
 Default training split:
 
@@ -180,6 +190,8 @@ Render `Bound!` around softmax-predicted bounce frames in the local DJI sample:
 ```bash
 docker compose run --rm app python tasks/annotate_bounce_video/run.py
 ```
+
+When `--table-geometry` is provided, rendering filters predicted bounces to the table region. Models trained with table-relative features also consume those features automatically.
 
 Default outputs:
 

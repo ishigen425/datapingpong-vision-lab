@@ -1,0 +1,11 @@
+{
+  "image_width": 1920,
+  "image_height": 1080,
+  "corners": {
+    "far_left": [673, 497],
+    "far_right": [1309, 501],
+    "near_right": [1484, 721],
+    "near_left": [501, 710]
+  },
+  "notes": "Placeholder table corners for DJI_0056_001. Replace these with measured image coordinates before using results as experiment records."
+}
