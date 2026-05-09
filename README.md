@@ -174,6 +174,22 @@ Evaluate predicted event frames:
 docker compose run --rm app python tasks/evaluate_event_detection/run.py
 ```
 
+Export detailed true-positive, false-positive, and false-negative review rows:
+
+```bash
+docker compose run --rm app python tasks/diagnose_event_detection/run.py \
+  --predictions outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json
+```
+
+Plot ball `x`/`y` and table-relative `table_x`/`table_y` timelines for review:
+
+```bash
+docker compose run --rm app python tasks/plot_ball_timeseries/run.py \
+  --events outputs/detect_events_from_ball/local_table_prior_motion_x30_y10_events.json \
+  --reference data/annotations/events/bounce_and_hit_frames.json \
+  --table-geometry data/annotations/table_geometry/DJI_0056_001.json
+```
+
 ### Rally Detection
 
 Segment the match into rally frame ranges from ball visibility and bounce/hit events:
@@ -217,6 +233,16 @@ Train and evaluate the coordinate-window softmax regression classifier:
 
 ```bash
 docker compose run --rm app python tasks/train_event_classifier/run.py
+```
+
+For the current OpenTTGames-learned bounce detector, train with `net_hit` as a separate class but emit/evaluate only `bounce`:
+
+```bash
+docker compose run --rm app python tasks/train_event_classifier/run.py \
+  --prediction-events bounce \
+  --model-output models/lightweight_events/openttgames_bounce_detector_softmax.json \
+  --predictions-output outputs/train_event_classifier/bounce_predictions.json \
+  --summary-output outputs/train_event_classifier/bounce_summary.json
 ```
 
 Pass `--table-geometry` to add table-relative features such as normalized table position, inside/outside state, edge margin, and net distance.

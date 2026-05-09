@@ -1,5 +1,18 @@
 # TODO
 
+## Next Priority
+
+The current end-to-end experimental pipeline can extract rally metadata from video, but the next work should improve upstream reliability before expanding downstream metadata.
+
+See `docs/progress_status.md` for the current pipeline status and improvement plan.
+
+Immediate order:
+
+1. Use `tasks/train_event_classifier/run.py --prediction-events bounce` as the current OpenTTGames bounce detector path.
+2. Calibrate the learned bounce detector on local DJI with table geometry and threshold review.
+3. Try bounce-only rally extraction before adding manually verified hit labels.
+4. Keep local DJI inferred `hit` labels out of supervised train/test sets.
+
 ## Docker Python Package Management
 
 Resolved in the Dockerfile by copying the `uv` binary from `ghcr.io/astral-sh/uv`, creating `/opt/venv` with `--system-site-packages` so the official PyTorch image packages remain visible, and syncing runtime dependencies from `pyproject.toml` with `uv.lock`:

@@ -213,6 +213,70 @@ def test_hit_local_motion_filter_removes_single_frame_x_jitter() -> None:
     assert kept == []
 
 
+def test_hit_local_motion_filter_rejects_strong_same_direction_pass() -> None:
+    points = [
+        BallPoint(94, 40, 100),
+        BallPoint(95, 55, 100),
+        BallPoint(96, 70, 101),
+        BallPoint(97, 85, 101),
+        BallPoint(98, 100, 102),
+        BallPoint(99, 115, 102),
+        BallPoint(100, 130, 103),
+        BallPoint(101, 145, 103),
+        BallPoint(102, 160, 104),
+        BallPoint(103, 175, 104),
+        BallPoint(104, 190, 105),
+        BallPoint(105, 205, 105),
+        BallPoint(106, 220, 106),
+    ]
+    peaks = [EventPeak("hit", 100, 0.8, 130, 103)]
+
+    kept = detect_events_run.filter_hits_by_local_motion(
+        peaks,
+        points,
+        window=6,
+        min_x_span=20,
+        min_y_span=0,
+        min_detections=4,
+        min_directional_x_displacement=0,
+        reject_same_directional_x_displacement=30,
+    )
+
+    assert kept == []
+
+
+def test_hit_local_motion_filter_keeps_weak_same_direction_candidate() -> None:
+    points = [
+        BallPoint(94, 100, 100),
+        BallPoint(95, 108, 100),
+        BallPoint(96, 116, 101),
+        BallPoint(97, 124, 101),
+        BallPoint(98, 132, 102),
+        BallPoint(99, 140, 102),
+        BallPoint(100, 148, 103),
+        BallPoint(101, 150, 103),
+        BallPoint(102, 152, 104),
+        BallPoint(103, 154, 104),
+        BallPoint(104, 156, 105),
+        BallPoint(105, 158, 105),
+        BallPoint(106, 160, 106),
+    ]
+    peaks = [EventPeak("hit", 100, 0.8, 148, 103)]
+
+    kept = detect_events_run.filter_hits_by_local_motion(
+        peaks,
+        points,
+        window=6,
+        min_x_span=20,
+        min_y_span=0,
+        min_detections=4,
+        min_directional_x_displacement=0,
+        reject_same_directional_x_displacement=30,
+    )
+
+    assert [(peak.event, peak.frame) for peak in kept] == [("hit", 100)]
+
+
 def test_hit_local_motion_filter_keeps_sustained_x_reversal() -> None:
     points = [
         BallPoint(94, 40, 100),

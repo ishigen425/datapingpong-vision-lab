@@ -16,3 +16,13 @@ Outputs:
 - `models/lightweight_events/openttgames_softmax.json`
 - `outputs/train_event_classifier/predictions.json`
 - `outputs/train_event_classifier/summary.json`
+
+To train with `net_hit` as a separate class but emit/evaluate only the stronger `bounce` detector:
+
+```bash
+docker compose run --rm app python tasks/train_event_classifier/run.py \
+  --prediction-events bounce \
+  --model-output models/lightweight_events/openttgames_bounce_detector_softmax.json \
+  --predictions-output outputs/train_event_classifier/bounce_predictions.json \
+  --summary-output outputs/train_event_classifier/bounce_summary.json
+```

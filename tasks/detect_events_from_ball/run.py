@@ -50,6 +50,12 @@ def main() -> int:
         default=0.0,
         help="Minimum pre/post x displacement in input-coordinate pixels, with opposite signs, for hit candidates.",
     )
+    parser.add_argument(
+        "--hit-reject-same-directional-x-displacement",
+        type=float,
+        default=0.0,
+        help="Reject hit candidates whose pre/post x displacements have the same sign and both exceed this input-pixel threshold.",
+    )
     args = parser.parse_args()
 
     groups = load_ball_point_groups(
@@ -94,6 +100,7 @@ def main() -> int:
             min_y_span=args.hit_min_local_y_span,
             min_detections=args.hit_min_local_detections,
             min_directional_x_displacement=args.hit_min_directional_x_displacement,
+            reject_same_directional_x_displacement=args.hit_reject_same_directional_x_displacement,
         )
         if table_geometry is not None:
             item_peaks = [
@@ -138,6 +145,7 @@ def main() -> int:
         "hit_min_local_y_span": args.hit_min_local_y_span,
         "hit_min_local_detections": args.hit_min_local_detections,
         "hit_min_directional_x_displacement": args.hit_min_directional_x_displacement,
+        "hit_reject_same_directional_x_displacement": args.hit_reject_same_directional_x_displacement,
         "frames": probabilities,
         "predicted_events": sorted(peaks, key=lambda row: (row.get("item", "__default__"), row["frame"], row["event"])),
     }
@@ -261,8 +269,15 @@ def filter_hits_by_local_motion(
     min_y_span: float,
     min_detections: int,
     min_directional_x_displacement: float,
+    reject_same_directional_x_displacement: float = 0.0,
 ) -> list[EventPeak]:
-    if min_x_span <= 0.0 and min_y_span <= 0.0 and min_detections <= 0 and min_directional_x_displacement <= 0.0:
+    if (
+        min_x_span <= 0.0
+        and min_y_span <= 0.0
+        and min_detections <= 0
+        and min_directional_x_displacement <= 0.0
+        and reject_same_directional_x_displacement <= 0.0
+    ):
         return peaks
     if window < 0:
         return peaks
@@ -298,6 +313,11 @@ def filter_hits_by_local_motion(
             if before_dx * after_dx >= 0.0:
                 continue
             if min(abs(before_dx), abs(after_dx)) < min_directional_x_displacement:
+                continue
+        if reject_same_directional_x_displacement > 0.0 and before_dx is not None and after_dx is not None:
+            same_direction = before_dx * after_dx > 0.0
+            strong_same_direction = min(abs(before_dx), abs(after_dx)) >= reject_same_directional_x_displacement
+            if same_direction and strong_same_direction:
                 continue
         kept.append(
             replace(
