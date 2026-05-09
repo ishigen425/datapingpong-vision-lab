@@ -266,6 +266,62 @@ For now, `empty` should be treated as a separate non-contact/segment label rathe
 - The net_hit detector needs stricter precision work before practical use. The next candidates are class-specific thresholds, richer trajectory features around net-hit candidates, and a held-out threshold sweep.
 - The reported ML numbers are OpenTTGames-only and should not be interpreted as racket-hit performance on the local DJI annotation, because OpenTTGames labels do not include the same `hit` class.
 
+## Validation Data Policy
+
+- OpenTTGames train/test split is the validation source for bounce-detector model selection.
+- Local DJI event labels are not a validation or test dataset for bounce-detector selection. Local DJI should be used only for qualitative video review and workflow debugging unless a separate hand-verified evaluation set is explicitly created.
+- Do not compare models by local DJI precision/recall/F1 in experiment records. If local DJI numbers are computed during debugging, treat them as non-selection diagnostics and do not use them to decide whether a detector is better.
+
+## 2026-05-09 Heavier Torch Detectors
+
+These runs use only the OpenTTGames train/test split for model selection. Local DJI videos generated from these models are qualitative review artifacts only.
+
+Torch MLP, small baseline:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml run --rm app python tasks/train_torch_event_classifier/run.py \
+  --prediction-events bounce \
+  --hidden-units 16 \
+  --epochs 5 \
+  --batch-size 512 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.10 \
+  --thresholds 0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 0.80 0.85 0.90 \
+  --model-output models/lightweight_events/openttgames_bounce_detector_torch_mlp.json \
+  --predictions-output outputs/train_torch_event_classifier/bounce_predictions.json \
+  --summary-output outputs/train_torch_event_classifier/bounce_summary.json
+```
+
+Best OpenTTGames test result: threshold `0.65`, precision `0.951`, recall `0.963`, F1 `0.957`.
+
+Transformer encoder experiment:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml run --rm app python tasks/train_torch_event_classifier/run.py \
+  --prediction-events bounce \
+  --architecture transformer \
+  --sequence-radius 6 \
+  --negative-ratio 4.0 \
+  --transformer-d-model 64 \
+  --transformer-heads 4 \
+  --transformer-layers 2 \
+  --transformer-feedforward 128 \
+  --epochs 40 \
+  --batch-size 512 \
+  --learning-rate 0.0005 \
+  --weight-decay 0.001 \
+  --dropout 0.20 \
+  --thresholds 0.95 0.97 0.98 0.985 0.99 0.995 \
+  --model-output models/lightweight_events/openttgames_bounce_detector_transformer.json \
+  --predictions-output outputs/train_torch_event_classifier/transformer_bounce_predictions.json \
+  --summary-output outputs/train_torch_event_classifier/transformer_bounce_summary.json
+```
+
+Best OpenTTGames test result: threshold `0.995`, precision `0.892`, recall `0.967`, F1 `0.928`.
+
+Interpretation: the Transformer path is now runnable on GPU and can consume temporal windows, but the first configuration underperforms both the softmax baseline and the small Torch MLP. With the current OpenTTGames split size, the heavier sequence model tends to overproduce bounce candidates unless thresholded very aggressively. Further Transformer work should focus on better sequence labels/losses, held-out calibration, and richer raw trajectory inputs rather than simply increasing model size.
+
 ## 2026-05-09 Serve-context bounce review
 
 The local DJI review showed that low serve bounces are easy to miss when using only a global confidence threshold. As a review aid, `tasks/annotate_bounce_video/run.py` now supports two lower-confidence overlays:

@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from datapingpong.events.features import build_feature_table
 from datapingpong.events.io import load_ball_point_groups
-from datapingpong.events.ml import SoftmaxRegression
+from datapingpong.events.ml import load_event_classifier
 from datapingpong.events.table import load_table_geometry
 
 
@@ -51,7 +51,7 @@ def main() -> int:
     args = parser.parse_args()
 
     video_info = read_video_info(args.video)
-    model = SoftmaxRegression.from_dict(json.loads(args.model.read_text(encoding="utf-8")))
+    model = load_event_classifier(json.loads(args.model.read_text(encoding="utf-8")))
     table_geometry = load_table_geometry(args.table_geometry)
     model_table_geometry = table_geometry if "table_x" in model.feature_names else None
     groups = load_ball_point_groups(args.ball, confidence_threshold=0.5, frame_offset=args.ball_frame_offset)

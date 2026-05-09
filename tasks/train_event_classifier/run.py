@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "tasks/evaluate_event_detection"))
 
 from datapingpong.events.features import build_feature_table
 from datapingpong.events.io import load_ball_point_groups, load_reference_events
-from datapingpong.events.ml import SoftmaxRegression
+from datapingpong.events.ml import MLPClassifier, SoftmaxRegression
 from datapingpong.events.table import load_table_geometry
 from run import summarize
 
@@ -51,6 +51,8 @@ def main() -> int:
     parser.add_argument("--epochs", type=int, default=700)
     parser.add_argument("--learning-rate", type=float, default=0.08)
     parser.add_argument("--l2", type=float, default=0.001)
+    parser.add_argument("--model-type", choices=["softmax", "mlp"], default="softmax")
+    parser.add_argument("--hidden-units", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--threshold", type=float, default=0.35)
     parser.add_argument("--nms-window", type=int, default=8)
@@ -84,16 +86,18 @@ def main() -> int:
         negative_ratio=args.negative_ratio,
         seed=args.seed,
     )
-    model = SoftmaxRegression.fit(
-        x_train,
-        y_train,
-        classes=args.classes,
-        feature_names=feature_names,
-        epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        l2=args.l2,
-        seed=args.seed,
-    )
+    classifier_cls = MLPClassifier if args.model_type == "mlp" else SoftmaxRegression
+    fit_kwargs = {
+        "classes": args.classes,
+        "feature_names": feature_names,
+        "epochs": args.epochs,
+        "learning_rate": args.learning_rate,
+        "l2": args.l2,
+        "seed": args.seed,
+    }
+    if args.model_type == "mlp":
+        fit_kwargs["hidden_units"] = args.hidden_units
+    model = classifier_cls.fit(x_train, y_train, **fit_kwargs)
     predictions = predict_events(
         model,
         feature_tables,
@@ -117,6 +121,11 @@ def main() -> int:
             "frame_width": args.frame_width,
             "frame_height": args.frame_height,
             "table_geometry": str(args.table_geometry) if args.table_geometry else None,
+            "model_type": args.model_type,
+            "hidden_units": args.hidden_units if args.model_type == "mlp" else None,
+            "epochs": args.epochs,
+            "learning_rate": args.learning_rate,
+            "l2": args.l2,
             "threshold": args.threshold,
             "nms_window": args.nms_window,
         }

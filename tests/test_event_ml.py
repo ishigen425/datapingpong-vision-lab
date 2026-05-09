@@ -10,7 +10,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from datapingpong.events.ml import SoftmaxRegression
+from datapingpong.events.ml import MLPClassifier, SoftmaxRegression, load_event_classifier
 
 TRAIN_EVENT_SPEC = importlib.util.spec_from_file_location("train_event_classifier_run", ROOT / "tasks/train_event_classifier/run.py")
 train_event_run = importlib.util.module_from_spec(TRAIN_EVENT_SPEC)
@@ -35,6 +35,34 @@ def test_softmax_regression_learns_separable_classes() -> None:
 
     assert model.predict(x).tolist() == y.tolist()
     restored = SoftmaxRegression.from_dict(model.to_dict())
+    assert restored.predict(x).tolist() == y.tolist()
+
+
+def test_mlp_classifier_learns_separable_classes() -> None:
+    x = np.asarray(
+        [
+            [-2.0, -1.0],
+            [-1.5, -1.0],
+            [1.0, 1.0],
+            [1.5, 1.0],
+            [3.0, -1.0],
+            [3.5, -1.0],
+        ]
+    )
+    y = np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int64)
+
+    model = MLPClassifier.fit(
+        x,
+        y,
+        classes=["a", "b", "c"],
+        feature_names=["x0", "x1"],
+        hidden_units=8,
+        epochs=500,
+        learning_rate=0.05,
+    )
+
+    assert model.predict(x).tolist() == y.tolist()
+    restored = load_event_classifier(model.to_dict())
     assert restored.predict(x).tolist() == y.tolist()
 
 
