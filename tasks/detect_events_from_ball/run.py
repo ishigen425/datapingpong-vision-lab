@@ -34,6 +34,12 @@ def main() -> int:
     parser.add_argument("--max-gap", type=int, default=3)
     parser.add_argument("--smooth-window", type=int, default=5)
     parser.add_argument("--hit-smooth-window", type=int, default=None)
+    parser.add_argument(
+        "--polynomial-bounce-weight",
+        type=float,
+        default=0.0,
+        help="Experimental TT3D-inspired local quadratic bounce score weight. Default keeps legacy bounce probabilities unchanged.",
+    )
     parser.add_argument("--table-geometry", type=Path, default=None, help="Optional JSON with table corner annotations.")
     parser.add_argument("--table-margin", type=float, default=0.05, help="Allowed normalized table margin for bounce candidates.")
     parser.add_argument("--input-frame-width", type=float, default=None, help="Coordinate width for input ball predictions.")
@@ -67,7 +73,12 @@ def main() -> int:
     probabilities = []
     peaks = []
     for item, points in groups.items():
-        item_probabilities = score_trajectory(points, max_gap=args.max_gap, smooth_window=args.smooth_window)
+        item_probabilities = score_trajectory(
+            points,
+            max_gap=args.max_gap,
+            smooth_window=args.smooth_window,
+            polynomial_bounce_weight=args.polynomial_bounce_weight,
+        )
         if args.hit_smooth_window is not None and args.hit_smooth_window != args.smooth_window:
             hit_probabilities = score_trajectory(points, max_gap=args.max_gap, smooth_window=args.hit_smooth_window)
             item_probabilities = merge_hit_probabilities(item_probabilities, hit_probabilities)
@@ -134,6 +145,7 @@ def main() -> int:
         "max_gap": args.max_gap,
         "smooth_window": args.smooth_window,
         "hit_smooth_window": args.hit_smooth_window,
+        "polynomial_bounce_weight": args.polynomial_bounce_weight,
         "table_geometry": str(args.table_geometry) if args.table_geometry else None,
         "table_margin": args.table_margin,
         "input_frame_width": args.input_frame_width,
@@ -197,6 +209,7 @@ def merge_hit_probabilities(
                 speed=row.speed,
                 acceleration=row.acceleration,
                 turn_angle_degrees=row.turn_angle_degrees,
+                poly_bounce_probability=row.poly_bounce_probability,
             )
         )
     return merged
@@ -255,6 +268,7 @@ def apply_table_event_prior(
                 speed=row.speed,
                 acceleration=row.acceleration,
                 turn_angle_degrees=row.turn_angle_degrees,
+                poly_bounce_probability=row.poly_bounce_probability,
             )
         )
     return adjusted

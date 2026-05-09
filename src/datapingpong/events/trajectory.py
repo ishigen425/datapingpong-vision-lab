@@ -26,6 +26,7 @@ class EventProbabilities:
     speed: float | None
     acceleration: float | None
     turn_angle_degrees: float | None
+    poly_bounce_probability: float | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ def score_trajectory(
     *,
     max_gap: int = 3,
     smooth_window: int = 5,
+    polynomial_bounce_weight: float = 0.0,
 ) -> list[EventProbabilities]:
     """Estimate bounce and hit probabilities from a tracked ball trajectory.
 
@@ -84,6 +86,7 @@ def score_trajectory(
 
     speed_scale = _robust_scale([speed for speed in speeds if speed is not None])
     accel_scale = _robust_scale([accel for accel in accelerations if accel is not None])
+    poly_bounce_scores = _polynomial_bounce_scores(frames, x_values, y_values, detected, confidences)
 
     rows: list[EventProbabilities] = []
     for index, point in enumerate(ordered):
@@ -96,7 +99,7 @@ def score_trajectory(
         speed_score = _ratio((speeds[index] or 0.0), speed_scale * 1.5)
         missing_edge = _missing_edge_score(detected, index)
 
-        bounce = _clamp01(
+        kinematic_bounce = _clamp01(
             track_quality
             * (
                 0.58 * y_flip
@@ -105,6 +108,8 @@ def score_trajectory(
                 + 0.08 * speed_score
             )
         )
+        poly_bounce = poly_bounce_scores[index]
+        bounce = max(kinematic_bounce, _clamp01(0.72 * kinematic_bounce + polynomial_bounce_weight * poly_bounce))
         hit = _clamp01(
             track_quality
             * (
@@ -129,6 +134,7 @@ def score_trajectory(
                 speed=round(speeds[index], 6) if speeds[index] is not None else None,
                 acceleration=round(accelerations[index], 6) if accelerations[index] is not None else None,
                 turn_angle_degrees=round(turn_angles[index], 6) if turn_angles[index] is not None else None,
+                poly_bounce_probability=round(poly_bounce, 6),
             )
         )
     return rows
@@ -282,6 +288,134 @@ def _x_velocity_delta_score(velocities: list[tuple[float, float] | None], index:
     if before is None or after is None:
         return 0.0
     return _ratio(abs(after[0] - before[0]), speed_scale * 1.2)
+
+
+def _polynomial_bounce_scores(
+    frames: list[int],
+    x_values: list[float | None],
+    y_values: list[float | None],
+    detected: list[bool],
+    confidences: list[float],
+    *,
+    fit_radius: int = 4,
+) -> list[float]:
+    scores = [0.0] * len(frames)
+    if len(frames) < fit_radius * 2 + 1:
+        return scores
+
+    step_distances = []
+    for index in range(1, len(frames)):
+        if x_values[index - 1] is None or x_values[index] is None:
+            continue
+        if y_values[index - 1] is None or y_values[index] is None:
+            continue
+        step_distances.append(
+            math.hypot(float(x_values[index]) - float(x_values[index - 1]), float(y_values[index]) - float(y_values[index - 1]))
+        )
+    distance_scale = max(_robust_scale(step_distances) * 0.75, 2.0)
+
+    for index, frame in enumerate(frames):
+        if not detected[index] or x_values[index] is None or y_values[index] is None:
+            continue
+        left_indices = [
+            candidate
+            for candidate in range(max(0, index - fit_radius), index)
+            if detected[candidate] and x_values[candidate] is not None and y_values[candidate] is not None
+        ]
+        right_indices = [
+            candidate
+            for candidate in range(index + 1, min(len(frames), index + fit_radius + 1))
+            if detected[candidate] and x_values[candidate] is not None and y_values[candidate] is not None
+        ]
+        if len(left_indices) < 3 or len(right_indices) < 3:
+            continue
+
+        left_x = _fit_quadratic([(frames[candidate] - frame, float(x_values[candidate])) for candidate in left_indices])
+        left_y = _fit_quadratic([(frames[candidate] - frame, float(y_values[candidate])) for candidate in left_indices])
+        right_x = _fit_quadratic([(frames[candidate] - frame, float(x_values[candidate])) for candidate in right_indices])
+        right_y = _fit_quadratic([(frames[candidate] - frame, float(y_values[candidate])) for candidate in right_indices])
+        if left_x is None or left_y is None or right_x is None or right_y is None:
+            continue
+
+        best_t = 0.0
+        best_distance = float("inf")
+        for step in range(-10, 11):
+            t = step / 10.0
+            dx = _eval_quadratic(left_x, t) - _eval_quadratic(right_x, t)
+            dy = _eval_quadratic(left_y, t) - _eval_quadratic(right_y, t)
+            distance = math.hypot(dx, dy)
+            if distance < best_distance:
+                best_t = t
+                best_distance = distance
+
+        left_dy = _eval_quadratic_derivative(left_y, best_t)
+        right_dy = _eval_quadratic_derivative(right_y, best_t)
+        if left_dy <= 0.0 or right_dy >= 0.0:
+            continue
+
+        intersection_x = (_eval_quadratic(left_x, best_t) + _eval_quadratic(right_x, best_t)) / 2.0
+        intersection_y = (_eval_quadratic(left_y, best_t) + _eval_quadratic(right_y, best_t)) / 2.0
+        center_distance = math.hypot(intersection_x - float(x_values[index]), intersection_y - float(y_values[index]))
+        velocity_scale = max(distance_scale, 1.0)
+        y_flip_score = _ratio(min(abs(left_dy), abs(right_dy)), velocity_scale)
+        intersection_score = 1.0 - _ratio(best_distance, distance_scale * 2.0)
+        center_score = 1.0 - _ratio(center_distance, distance_scale * 2.5)
+        time_score = 1.0 - _ratio(abs(best_t), 1.0)
+        scores[index] = _clamp01(
+            _track_quality(detected, confidences, index, radius=fit_radius)
+            * (0.42 * y_flip_score + 0.26 * intersection_score + 0.22 * center_score + 0.10 * time_score)
+        )
+    return scores
+
+
+def _fit_quadratic(points: list[tuple[float, float]]) -> tuple[float, float, float] | None:
+    if len(points) < 3:
+        return None
+    s0 = float(len(points))
+    s1 = sum(t for t, _ in points)
+    s2 = sum(t * t for t, _ in points)
+    s3 = sum(t * t * t for t, _ in points)
+    s4 = sum(t * t * t * t for t, _ in points)
+    v0 = sum(value for _, value in points)
+    v1 = sum(t * value for t, value in points)
+    v2 = sum(t * t * value for t, value in points)
+    return _solve_3x3(
+        [
+            [s4, s3, s2],
+            [s3, s2, s1],
+            [s2, s1, s0],
+        ],
+        [v2, v1, v0],
+    )
+
+
+def _solve_3x3(matrix: list[list[float]], vector: list[float]) -> tuple[float, float, float] | None:
+    rows = [matrix[row][:] + [vector[row]] for row in range(3)]
+    for column in range(3):
+        pivot = max(range(column, 3), key=lambda row: abs(rows[row][column]))
+        if abs(rows[pivot][column]) < 1e-9:
+            return None
+        rows[column], rows[pivot] = rows[pivot], rows[column]
+        pivot_value = rows[column][column]
+        for entry in range(column, 4):
+            rows[column][entry] /= pivot_value
+        for row in range(3):
+            if row == column:
+                continue
+            factor = rows[row][column]
+            for entry in range(column, 4):
+                rows[row][entry] -= factor * rows[column][entry]
+    return rows[0][3], rows[1][3], rows[2][3]
+
+
+def _eval_quadratic(coefficients: tuple[float, float, float], t: float) -> float:
+    a, b, c = coefficients
+    return a * t * t + b * t + c
+
+
+def _eval_quadratic_derivative(coefficients: tuple[float, float, float], t: float) -> float:
+    a, b, _ = coefficients
+    return 2.0 * a * t + b
 
 
 def _track_quality(detected: list[bool], confidences: list[float], index: int, radius: int = 2) -> float:

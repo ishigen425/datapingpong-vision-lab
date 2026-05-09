@@ -18,6 +18,56 @@ This document records the current coordinate-only event detection results so lat
 
 ## Results
 
+## 2026-05-10 TT3D-Inspired Polynomial Bounce Score
+
+Inspired by TT3D's trajectory segmentation, the rule detector now computes an optional local quadratic bounce score. The score fits separate second-degree curves before and after each frame, then checks whether the fitted curves intersect near the current ball point with vertical motion changing from downward to upward.
+
+Implementation notes:
+
+- The diagnostic field is exported as `poly_bounce_probability`.
+- The score is not mixed into the default detector output.
+- `tasks/detect_events_from_ball/run.py` exposes `--polynomial-bounce-weight` for explicit experiments.
+- Default `--polynomial-bounce-weight 0.0` preserves the previous coordinate-rule behavior.
+- Local DJI was not used as a test set for this decision.
+
+OpenTTGames bounce-only comparison with `--bounce-threshold 0.35`:
+
+| Polynomial weight | Predicted | Precision | Recall | F1 |
+| ---: | ---: | ---: | ---: | ---: |
+| `0.00` | `2575` | `0.6058` | `0.8779` | `0.7169` |
+| `0.10` | `2575` | `0.6058` | `0.8779` | `0.7169` |
+| `0.20` | `2577` | `0.6061` | `0.8790` | `0.7175` |
+| `0.38` | `2720` | `0.5798` | `0.8875` | `0.7014` |
+
+Threshold sweep observations:
+
+| Detector setting | Bounce threshold | Predicted | Precision | Recall | F1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `weight=0.00` | `0.42` | `1521` | `0.9303` | `0.7963` | `0.8581` |
+| `weight=0.20` | `0.42` | `1521` | `0.9303` | `0.7963` | `0.8581` |
+| `weight=0.38` | `0.45` | `1464` | `0.9481` | `0.7811` | `0.8565` |
+
+Interpretation:
+
+- Directly adding the polynomial score is not a meaningful improvement on OpenTTGames. A small weight only changes metrics at noise level, while a larger weight adds false positives.
+- The score is still useful as a diagnostic signal and potential lightweight-classifier feature.
+- The larger improvement in this rule baseline comes from threshold calibration, not from the polynomial score itself.
+
+Commands:
+
+```bash
+docker compose run --rm app python tasks/detect_events_from_ball/run.py \
+  --input data/annotations/openttgames/ball_positions.jsonl \
+  --output outputs/detect_events_from_ball/opentt_poly_w020_events.json \
+  --polynomial-bounce-weight 0.20
+
+docker compose run --rm app python tasks/evaluate_event_detection/run.py \
+  --reference data/annotations/openttgames/events.jsonl \
+  --predictions outputs/detect_events_from_ball/opentt_poly_w020_events.json \
+  --summary outputs/evaluate_event_detection/opentt_poly_w020_summary.json \
+  --events bounce
+```
+
 ## 2026-05-09 Bounce Detector Update
 
 The OpenTTGames bounce detector was promoted from the coordinate-only rule baseline to a lightweight ML detector.

@@ -36,6 +36,29 @@ def test_bounce_probability_peaks_on_y_velocity_flip() -> None:
     assert peak.bounce_probability > 0.55
 
 
+def test_polynomial_bounce_score_peaks_on_smooth_parabolic_segments() -> None:
+    points = [
+        BallPoint(0, 0, 40),
+        BallPoint(1, 10, 58),
+        BallPoint(2, 20, 72),
+        BallPoint(3, 30, 82),
+        BallPoint(4, 40, 88),
+        BallPoint(5, 50, 90),
+        BallPoint(6, 60, 88),
+        BallPoint(7, 70, 82),
+        BallPoint(8, 80, 72),
+        BallPoint(9, 90, 58),
+        BallPoint(10, 100, 40),
+    ]
+
+    rows = score_trajectory(points, smooth_window=1)
+
+    peak = max(rows, key=lambda row: row.poly_bounce_probability or 0.0)
+    assert peak.frame == 5
+    assert peak.poly_bounce_probability is not None
+    assert peak.poly_bounce_probability > 0.55
+
+
 def test_hit_probability_peaks_on_x_velocity_flip() -> None:
     points = [
         BallPoint(0, 0, 100),

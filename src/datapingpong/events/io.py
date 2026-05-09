@@ -79,6 +79,7 @@ def probabilities_to_dicts(rows: list[EventProbabilities]) -> list[dict[str, Any
             "speed": row.speed,
             "acceleration": row.acceleration,
             "turn_angle_degrees": row.turn_angle_degrees,
+            "poly_bounce_probability": row.poly_bounce_probability,
         }
         for row in rows
     ]
