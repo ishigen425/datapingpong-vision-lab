@@ -31,6 +31,12 @@ def main() -> int:
     parser.add_argument("--events-output", type=Path, default=ROOT / "outputs/annotate_bounce_video/bounce_events.json")
     parser.add_argument("--subtitle-output", type=Path, default=ROOT / "outputs/annotate_bounce_video/bounce_events.ass")
     parser.add_argument("--threshold", type=float, default=0.025)
+    parser.add_argument("--weak-threshold", type=float, default=None, help="Optional lower threshold for weak bounce candidates shown separately.")
+    parser.add_argument("--serve-threshold", type=float, default=None, help="Optional lower threshold for serve-context bounce candidates.")
+    parser.add_argument("--serve-lookback", type=int, default=90, help="Frames before a candidate used to detect toss-like serve context.")
+    parser.add_argument("--serve-max-x-span", type=float, default=140.0, help="Maximum local x span, in video pixels, for toss-like serve context.")
+    parser.add_argument("--serve-min-y-rise", type=float, default=90.0, help="Minimum upward y displacement, in video pixels, for toss-like serve context.")
+    parser.add_argument("--serve-min-y-drop", type=float, default=45.0, help="Minimum downward y displacement before candidate, in video pixels, for toss-like serve context.")
     parser.add_argument("--nms-window", type=int, default=8)
     parser.add_argument("--display-window", type=int, default=4, help="Frames before/after each bounce to show text.")
     parser.add_argument("--spatial-prior-weight", type=float, default=2.25)
@@ -79,10 +85,19 @@ def main() -> int:
         sigma_x=args.spatial_prior_sigma_x,
         sigma_y=args.spatial_prior_sigma_y,
     )
+    candidate_threshold = min(
+        value
+        for value in (args.threshold, args.weak_threshold, args.serve_threshold)
+        if value is not None
+    )
+    if args.weak_threshold is not None and args.weak_threshold > args.threshold:
+        raise ValueError("--weak-threshold must be less than or equal to --threshold")
+    if args.serve_threshold is not None and args.serve_threshold > args.threshold:
+        raise ValueError("--serve-threshold must be less than or equal to --threshold")
     candidates = [
         (frame, float(probability))
         for frame, probability in zip(table.frames, probabilities, strict=True)
-        if probability >= args.threshold
+        if probability >= candidate_threshold
     ]
     if table_geometry is not None:
         candidates = [
@@ -93,7 +108,20 @@ def main() -> int:
                 margin=args.table_margin,
             )
         ]
-    bounces = nms(candidates, args.nms_window)
+    bounces = classify_candidates(
+        nms(candidates, args.nms_window),
+        points_by_frame,
+        video_info,
+        ball_frame_width=ball_frame_width,
+        ball_frame_height=ball_frame_height,
+        strong_threshold=args.threshold,
+        weak_threshold=args.weak_threshold,
+        serve_threshold=args.serve_threshold,
+        serve_lookback=args.serve_lookback,
+        serve_max_x_span=args.serve_max_x_span,
+        serve_min_y_rise=args.serve_min_y_rise,
+        serve_min_y_drop=args.serve_min_y_drop,
+    )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.events_output.write_text(
@@ -103,6 +131,12 @@ def main() -> int:
                 "ball": str(args.ball),
                 "model": str(args.model),
                 "threshold": args.threshold,
+                "weak_threshold": args.weak_threshold,
+                "serve_threshold": args.serve_threshold,
+                "serve_lookback": args.serve_lookback,
+                "serve_max_x_span": args.serve_max_x_span,
+                "serve_min_y_rise": args.serve_min_y_rise,
+                "serve_min_y_drop": args.serve_min_y_drop,
                 "nms_window": args.nms_window,
                 "display_window": args.display_window,
                 "spatial_prior_weight": args.spatial_prior_weight,
@@ -117,8 +151,8 @@ def main() -> int:
                 "video_codec": args.video_codec,
                 "fps": video_info["fps"],
                 "predicted_events": [
-                    {"event": "bounce", "frame": frame, "probability": round(probability, 6)}
-                    for frame, probability in bounces
+                    {"event": event, "frame": frame, "probability": round(probability, 6)}
+                    for frame, probability, event in bounces
                 ],
             },
             indent=2,
@@ -136,9 +170,11 @@ def main() -> int:
                 "events_output": str(args.events_output),
                 "subtitle_output": str(args.subtitle_output),
                 "fps": video_info["fps"],
-                "bounce_events": len(bounces),
+                "bounce_events": sum(1 for _, _, event in bounces if event == "bounce"),
+                "weak_bounce_events": sum(1 for _, _, event in bounces if event == "weak_bounce"),
+                "serve_bounce_events": sum(1 for _, _, event in bounces if event == "serve_bounce"),
                 "video_codec": args.video_codec,
-                "first_frames": [frame for frame, _ in bounces[:10]],
+                "first_frames": [frame for frame, _, _ in bounces[:10]],
             },
             indent=2,
         )
@@ -166,6 +202,86 @@ def nms(candidates: list[tuple[int, float]], window: int) -> list[tuple[int, flo
         if all(abs(frame - selected_frame) > window for selected_frame, _ in selected):
             selected.append((frame, probability))
     return sorted(selected)
+
+
+def classify_candidates(
+    candidates: list[tuple[int, float]],
+    points_by_frame: dict[int, Any],
+    video_info: dict[str, Any],
+    *,
+    ball_frame_width: float,
+    ball_frame_height: float,
+    strong_threshold: float,
+    weak_threshold: float | None,
+    serve_threshold: float | None,
+    serve_lookback: int,
+    serve_max_x_span: float,
+    serve_min_y_rise: float,
+    serve_min_y_drop: float,
+) -> list[tuple[int, float, str]]:
+    rows = []
+    for frame, probability in candidates:
+        if probability >= strong_threshold:
+            event = "bounce"
+        elif (
+            serve_threshold is not None
+            and probability >= serve_threshold
+            and has_toss_like_context(
+                frame,
+                points_by_frame,
+                video_info,
+                ball_frame_width=ball_frame_width,
+                ball_frame_height=ball_frame_height,
+                lookback=serve_lookback,
+                max_x_span=serve_max_x_span,
+                min_y_rise=serve_min_y_rise,
+                min_y_drop=serve_min_y_drop,
+            )
+        ):
+            event = "serve_bounce"
+        elif weak_threshold is not None and probability >= weak_threshold:
+            event = "weak_bounce"
+        else:
+            continue
+        rows.append((frame, probability, event))
+    return rows
+
+
+def has_toss_like_context(
+    frame: int,
+    points_by_frame: dict[int, Any],
+    video_info: dict[str, Any],
+    *,
+    ball_frame_width: float,
+    ball_frame_height: float,
+    lookback: int,
+    max_x_span: float,
+    min_y_rise: float,
+    min_y_drop: float,
+) -> bool:
+    points = []
+    for candidate_frame in range(frame - lookback, frame + 1):
+        point = points_by_frame.get(candidate_frame)
+        if point is None or not point.detected or point.x is None or point.y is None:
+            continue
+        x, y = scale_point_to_video(point, ball_frame_width, ball_frame_height, video_info)
+        if x is not None and y is not None:
+            points.append((candidate_frame, float(x), float(y)))
+    if len(points) < 6:
+        return False
+    x_values = [x for _, x, _ in points]
+    if max(x_values) - min(x_values) > max_x_span:
+        return False
+    y_values = [y for _, _, y in points]
+    highest_index = min(range(len(points)), key=lambda index: y_values[index])
+    start_y = y_values[0]
+    highest_y = y_values[highest_index]
+    candidate_y = y_values[-1]
+    y_rise = start_y - highest_y
+    y_drop = candidate_y - highest_y
+    if highest_index == 0 or highest_index == len(points) - 1:
+        return False
+    return y_rise >= min_y_rise and y_drop >= min_y_drop
 
 
 def features_for_model(feature_names: list[str], features: Any, model_feature_names: list[str]) -> Any:
@@ -248,7 +364,7 @@ def _sigmoid(value: float) -> float:
     return 1.0 / (1.0 + math.exp(-value))
 
 
-def write_ass(path: Path, bounces: list[tuple[int, float]], video_info: dict[str, Any], display_window: int) -> None:
+def write_ass(path: Path, bounces: list[tuple[int, float, str]], video_info: dict[str, Any], display_window: int) -> None:
     width = video_info["width"]
     height = video_info["height"]
     fps = video_info["fps"]
@@ -266,15 +382,27 @@ def write_ass(path: Path, bounces: list[tuple[int, float]], video_info: dict[str
         "Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Bound,Arial,{font_size},&H0000D7FF,&H0000FFFF,&H00000000,&H80000000,"
         "1,0,0,0,100,100,0,0,1,4,1,8,20,20,20,1",
+        f"Style: WeakBound,Arial,{max(36, int(font_size * 0.70))},&H00B0B0B0,&H0000FFFF,&H00333333,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,3,1,8,20,20,120,1",
+        f"Style: ServeBound,Arial,{max(42, int(font_size * 0.78))},&H0000A5FF,&H0000FFFF,&H00222222,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,3,1,8,20,20,80,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
-    for frame, probability in bounces:
+    for frame, probability, event in bounces:
         start_frame = max(0, frame - display_window)
         end_frame = min(video_info["frames"], frame + display_window + 1)
-        text = f"{{\\pos({width // 2},{y})}}BOUND!  f={frame}  p={probability:.2f}"
-        lines.append(f"Dialogue: 0,{ass_time(start_frame / fps)},{ass_time(end_frame / fps)},Bound,,0,0,0,,{text}")
+        if event == "serve_bounce":
+            text = f"{{\\pos({width // 2},{int(y * 1.18)})}}serve bounce?  f={frame}  p={probability:.2f}"
+            style = "ServeBound"
+        elif event == "weak_bounce":
+            text = f"{{\\pos({width // 2},{int(y * 1.35)})}}weak bounce?  f={frame}  p={probability:.2f}"
+            style = "WeakBound"
+        else:
+            text = f"{{\\pos({width // 2},{y})}}BOUND!  f={frame}  p={probability:.2f}"
+            style = "Bound"
+        lines.append(f"Dialogue: 0,{ass_time(start_frame / fps)},{ass_time(end_frame / fps)},{style},,0,0,0,,{text}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

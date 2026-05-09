@@ -16,8 +16,13 @@ Default input is the local DJI sample:
 Default scoring applies a broad center-of-frame spatial prior after the softmax model:
 
 - threshold: `0.025`
+- weak threshold: disabled by default
 - NMS window: `8`
 - spatial prior weight: `2.25`
 - spatial prior sigma: `x=0.32`, `y=0.30`
 
 Pass `--table-geometry data/annotations/table_geometry/<video>.json` to filter rendered bounces to the table region. If the model was trained with table-relative features, the task also supplies those features at prediction time.
+
+Pass `--weak-threshold` below `--threshold` to render lower-confidence candidates as `weak bounce?` instead of dropping them. This is useful when reviewing whether bounce recall is high enough for rally proposal generation.
+
+Pass `--serve-threshold` below `--threshold` to render lower-confidence candidates as `serve bounce?` only when the immediately preceding ball track looks like a serve toss: small x-span, upward y motion, then downward motion into the candidate. This raises recall only in serve-like context instead of lowering the threshold globally.

@@ -265,3 +265,39 @@ For now, `empty` should be treated as a separate non-contact/segment label rathe
 - Visual inspection of the table-gated render looked close to 80% usable, but remaining false positives/negatives still need threshold and table-relative model work.
 - The net_hit detector needs stricter precision work before practical use. The next candidates are class-specific thresholds, richer trajectory features around net-hit candidates, and a held-out threshold sweep.
 - The reported ML numbers are OpenTTGames-only and should not be interpreted as racket-hit performance on the local DJI annotation, because OpenTTGames labels do not include the same `hit` class.
+
+## 2026-05-09 Serve-context bounce review
+
+The local DJI review showed that low serve bounces are easy to miss when using only a global confidence threshold. As a review aid, `tasks/annotate_bounce_video/run.py` now supports two lower-confidence overlays:
+
+- `weak_bounce`: probability is below the strong threshold but above `--weak-threshold`.
+- `serve_bounce`: probability is below the strong threshold but above `--serve-threshold`, and the preceding ball track looks toss-like: small x-span, upward y motion, then downward y motion into the candidate.
+
+Relaxed local review render:
+
+```bash
+docker compose run --rm app python tasks/annotate_bounce_video/run.py \
+  --model models/lightweight_events/openttgames_bounce_detector_softmax.json \
+  --table-geometry data/annotations/table_geometry/DJI_0056_001.json \
+  --threshold 0.5 \
+  --weak-threshold 0.35 \
+  --serve-threshold 0.20 \
+  --serve-lookback 120 \
+  --serve-max-x-span 360 \
+  --serve-min-y-rise 40 \
+  --serve-min-y-drop 25 \
+  --video-codec libx264 \
+  --output outputs/annotate_bounce_video/DJI_0056_001_bounce_ml_table_serve_weak_relaxed.mp4 \
+  --events-output outputs/annotate_bounce_video/DJI_0056_001_bounce_ml_table_serve_weak_relaxed_events.json \
+  --subtitle-output outputs/annotate_bounce_video/DJI_0056_001_bounce_ml_table_serve_weak_relaxed.ass
+```
+
+Output candidate counts:
+
+| Event | Count |
+| --- | ---: |
+| `bounce` | 239 |
+| `weak_bounce` | 39 |
+| `serve_bounce` | 13 |
+
+When `weak_bounce` and `serve_bounce` are both treated as bounce candidates against the current local hand annotation with `+-4` frame tolerance, the reference check is `P=0.622`, `R=0.745`, `F1=0.678`. This is a recall-oriented review overlay, not a new production threshold. The next decision should come from visual inspection of the rendered serve candidates: if they are mostly true low serve bounces, keep this as a serve-specific proposal channel; if not, add player pose or racket/hand context before lowering serve thresholds further.
