@@ -5,6 +5,8 @@ import sys
 import importlib.util
 import json
 
+import numpy as np
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -31,3 +33,16 @@ def test_load_ball_points_applies_frame_offset(tmp_path: Path) -> None:
 
     assert len(points) == 1
     assert points[0].frame == 4
+
+
+def test_raw_heatmap_detection_uses_threshold() -> None:
+    heatmap = np.zeros((8, 8), dtype=np.float32)
+    heatmap[3, 5] = 0.7
+
+    x, y, confidence = detect_ball_run.raw_heatmap_detection(heatmap, threshold=0.5)
+    assert (x, y) == (5, 3)
+    assert abs(confidence - 0.7) < 1e-6
+
+    x, y, confidence = detect_ball_run.raw_heatmap_detection(heatmap, threshold=0.8)
+    assert (x, y) == (None, None)
+    assert abs(confidence - 0.7) < 1e-6

@@ -80,6 +80,23 @@ def test_active_rally_returns_current_segment() -> None:
     assert rally["id"] == 2
 
 
+def test_load_ball_rows_preserves_unet_detection_fields(tmp_path: Path) -> None:
+    path = tmp_path / "ball.json"
+    path.write_text(
+        '{"input_size":{"width":640,"height":360},"predictions":[{"frame":7,"x":10,"y":20,"confidence":0.4,"unet_x":30,"unet_y":40,"unet_confidence":0.9,"unet_detected":true}]}',
+        encoding="utf-8",
+    )
+
+    rows = annotate_multimodal_run.load_ball_rows(path, {"width": 1920, "height": 1080}, frame_offset=4)
+
+    assert rows[11]["x"] == 10.0
+    assert rows[11]["unet_x"] == 30.0
+    assert rows[11]["unet_y"] == 40.0
+    assert rows[11]["unet_confidence"] == 0.9
+    assert rows[11]["unet_detected"] is True
+    assert annotate_multimodal_run.unet_point_from_ball_row(rows[11], {"width": 1920, "height": 1080}) == (90, 120)
+
+
 def test_load_rallies_reads_payload_wrapper(tmp_path: Path) -> None:
     path = tmp_path / "rallies.json"
     path.write_text(

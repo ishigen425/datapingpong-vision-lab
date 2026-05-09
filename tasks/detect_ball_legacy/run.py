@@ -44,6 +44,11 @@ def main() -> int:
     parser.add_argument("--belief-measurement-floor", type=float, default=0.02)
     parser.add_argument("--belief-measurement-power", type=float, default=1.5)
     parser.add_argument("--belief-max-missed", type=int, default=100)
+    parser.add_argument(
+        "--no-belief-reacquire-after-missed",
+        action="store_true",
+        help="Keep using belief gating after missed frames instead of snapping to a strong new UNet detection.",
+    )
     args = parser.parse_args()
 
     device = select_device(args.device)
@@ -70,6 +75,7 @@ def main() -> int:
         belief_measurement_floor=args.belief_measurement_floor,
         belief_measurement_power=args.belief_measurement_power,
         belief_max_missed=args.belief_max_missed,
+        belief_reacquire_after_missed=not args.no_belief_reacquire_after_missed,
     )
 
     print(f"device: {device}")
@@ -123,7 +129,8 @@ def run_video(
     belief_measurement_floor: float,
     belief_measurement_power: float,
     belief_max_missed: int,
-) -> list[dict[str, float | int | None]]:
+    belief_reacquire_after_missed: bool = True,
+) -> list[dict[str, float | int | bool | None]]:
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
 
@@ -153,6 +160,8 @@ def run_video(
         measurement_power=belief_measurement_power,
         max_missed_frames=belief_max_missed,
         output_threshold=threshold,
+        reacquire_after_missed=belief_reacquire_after_missed,
+        reacquire_threshold=threshold,
     )
 
     with torch.no_grad():
@@ -173,6 +182,7 @@ def run_video(
 
             tensor = stack_frames(frames).to(device)
             heatmap = model(tensor).squeeze().detach().cpu().numpy()
+            unet_x, unet_y, unet_confidence = raw_heatmap_detection(heatmap, threshold=threshold)
             peaks = extract_top_peaks(
                 heatmap,
                 threshold=candidate_threshold if decoder in {"belief", "track"} else threshold,
@@ -209,6 +219,10 @@ def run_video(
                 "y": y_value,
                 "confidence": confidence,
                 "candidate_count": candidate_count,
+                "unet_x": unet_x,
+                "unet_y": unet_y,
+                "unet_confidence": unet_confidence,
+                "unet_detected": unet_x is not None and unet_y is not None,
             }
             predictions.append(row)
             if debug_stride > 0 and output_frame % debug_stride == 0:
@@ -219,6 +233,9 @@ def run_video(
                     x_value,
                     y_value,
                     confidence,
+                    unet_x=unet_x,
+                    unet_y=unet_y,
+                    unet_confidence=unet_confidence,
                     peaks=peaks,
                 )
 
@@ -244,6 +261,7 @@ def run_video(
         "belief_measurement_floor": belief_measurement_floor,
         "belief_measurement_power": belief_measurement_power,
         "belief_max_missed": belief_max_missed,
+        "belief_reacquire_after_missed": belief_reacquire_after_missed,
         "elapsed_s": round(perf_counter() - started, 3),
         "predictions": predictions,
     }
@@ -268,6 +286,14 @@ def prediction_frame_index(current_frame: int, *, window_size: int) -> int:
     return current_frame - window_size // 2
 
 
+def raw_heatmap_detection(heatmap: np.ndarray, *, threshold: float) -> tuple[int | None, int | None, float]:
+    confidence = float(np.max(heatmap)) if heatmap.size else 0.0
+    if confidence < threshold:
+        return None, None, confidence
+    y, x = np.unravel_index(int(np.argmax(heatmap)), heatmap.shape)
+    return int(x), int(y), confidence
+
+
 def write_debug_frame(
     debug_dir: Path,
     frame_index: int,
@@ -276,16 +302,21 @@ def write_debug_frame(
     y: int | None,
     confidence: float,
     *,
+    unet_x: int | None = None,
+    unet_y: int | None = None,
+    unet_confidence: float = 0.0,
     peaks: list[HeatmapPeak],
 ) -> None:
     image = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
     for peak in peaks:
         cv2.circle(image, (peak.x, peak.y), 3, (255, 180, 0), 1, cv2.LINE_AA)
+    if unet_x is not None and unet_y is not None:
+        cv2.drawMarker(image, (unet_x, unet_y), (255, 0, 255), cv2.MARKER_CROSS, 14, 2, cv2.LINE_AA)
     if x is not None and y is not None:
         cv2.circle(image, (x, y), 5, (0, 220, 60), 2)
     cv2.putText(
         image,
-        f"frame={frame_index} conf={confidence:.3f}",
+        f"frame={frame_index} track={confidence:.3f} unet={unet_confidence:.3f}",
         (12, 24),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,

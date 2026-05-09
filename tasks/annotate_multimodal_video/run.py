@@ -193,6 +193,7 @@ def render_video(
 
         draw_ball_trail(frame, history)
         if ball_row is not None:
+            draw_unet_marker(frame, unet_point_from_ball_row(ball_row, video_info), ball_row)
             draw_ball_marker(frame, point_from_ball_row(ball_row, video_info), ball_row)
         active_labels = active_event_labels(events, frame_index, window=event_display_window)
         draw_event_labels(frame, active_labels)
@@ -234,10 +235,12 @@ def load_ball_rows(path: Path, video_info: dict[str, Any], *, frame_offset: int 
     if len(groups) != 1:
         raise ValueError(f"Expected one coordinate group for {path}, got {len(groups)}.")
     _, points = next(iter(groups.items()))
-    scale_width, scale_height = resolve_ball_frame_size(points, video_info)
+    raw_rows = load_raw_ball_prediction_rows(path, frame_offset=frame_offset)
+    input_size = load_ball_input_size(path)
+    scale_width, scale_height = input_size if input_size is not None else resolve_ball_frame_size(points, video_info)
     rows: dict[int, dict[str, float | bool | None]] = {}
     for point in points:
-        rows[point.frame] = {
+        row: dict[str, float | bool | None] = {
             "x": float(point.x) if point.x is not None else None,
             "y": float(point.y) if point.y is not None else None,
             "detected": bool(point.detected),
@@ -245,7 +248,48 @@ def load_ball_rows(path: Path, video_info: dict[str, Any], *, frame_offset: int 
             "input_width": scale_width,
             "input_height": scale_height,
         }
+        raw_row = raw_rows.get(point.frame)
+        if raw_row is not None:
+            row.update(
+                {
+                    "unet_x": raw_float(raw_row.get("unet_x")),
+                    "unet_y": raw_float(raw_row.get("unet_y")),
+                    "unet_confidence": raw_float(raw_row.get("unet_confidence")) or 0.0,
+                    "unet_detected": bool(raw_row.get("unet_detected", False)),
+                }
+            )
+        rows[point.frame] = row
     return rows
+
+
+def load_raw_ball_prediction_rows(path: Path, *, frame_offset: int) -> dict[int, dict[str, Any]]:
+    if path.suffix == ".jsonl":
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict) and isinstance(payload.get("predictions"), list):
+        return {int(row.get("frame", index)) + frame_offset: row for index, row in enumerate(payload["predictions"])}
+    if isinstance(payload, list):
+        return {int(row.get("frame", index)) + frame_offset: row for index, row in enumerate(payload) if isinstance(row, dict)}
+    return {}
+
+
+def load_ball_input_size(path: Path) -> tuple[float, float] | None:
+    if path.suffix == ".jsonl":
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("input_size"), dict):
+        return None
+    width = raw_float(payload["input_size"].get("width"))
+    height = raw_float(payload["input_size"].get("height"))
+    if width is None or height is None:
+        return None
+    return width, height
+
+
+def raw_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def resolve_ball_frame_size(points: list[Any], video_info: dict[str, Any]) -> tuple[float, float]:
@@ -314,6 +358,14 @@ def point_from_ball_row(ball_row: dict[str, float | bool | None], video_info: di
     return x, y
 
 
+def unet_point_from_ball_row(ball_row: dict[str, float | bool | None], video_info: dict[str, Any]) -> tuple[int, int] | None:
+    if not ball_row.get("unet_detected") or ball_row.get("unet_x") is None or ball_row.get("unet_y") is None:
+        return None
+    x = int(round(float(ball_row["unet_x"]) * float(video_info["width"]) / float(ball_row["input_width"])))
+    y = int(round(float(ball_row["unet_y"]) * float(video_info["height"]) / float(ball_row["input_height"])))
+    return x, y
+
+
 def draw_ball_trail(frame: Any, history: list[tuple[int, int]]) -> None:
     if len(history) < 2:
         return
@@ -332,6 +384,15 @@ def draw_ball_marker(frame: Any, point: tuple[int, int] | None, ball_row: dict[s
     cv2.circle(frame, point, 2, (255, 255, 255), -1, cv2.LINE_AA)
     label = f"ball {float(ball_row['confidence']):.2f}"
     cv2.putText(frame, label, (point[0] + 8, point[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def draw_unet_marker(frame: Any, point: tuple[int, int] | None, ball_row: dict[str, float | bool | None]) -> None:
+    if point is None:
+        return
+    cv2.drawMarker(frame, point, (255, 0, 255), cv2.MARKER_CROSS, 18, 2, cv2.LINE_AA)
+    confidence = float(ball_row.get("unet_confidence") or 0.0)
+    label = f"unet {confidence:.2f}"
+    cv2.putText(frame, label, (point[0] + 8, point[1] + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
 
 def active_event_labels(events: list[dict[str, Any]], frame: int, *, window: int) -> list[str]:

@@ -24,6 +24,7 @@ Default output:
 The overlay shows:
 
 - recent ball trajectory trail and current ball location
+- when the ball JSON contains `unet_x`/`unet_y`, the raw UNet detection is drawn as a magenta cross separately from the tracked ball circle
 - `BOUNCE` / `HIT` labels near the corresponding frames
 - optional current rally panel with rally number, frame range, and event counts
 - `left` / `right` upper-body pose skeletons from MediaPipe Pose

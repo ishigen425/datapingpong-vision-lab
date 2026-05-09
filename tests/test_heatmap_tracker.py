@@ -75,3 +75,18 @@ def test_belief_tracker_keeps_local_state_on_weak_measurement() -> None:
     assert out2.y is not None
     assert abs(out2.x - 11) <= 1
     assert abs(out2.y - 20) <= 1
+
+
+def test_belief_tracker_reacquires_strong_peak_after_miss() -> None:
+    tracker = BallBeliefHeatmapTracker((80, 80), gravity_y=0.0, output_threshold=0.2)
+    first = np.zeros((80, 80), dtype=np.float32)
+    first[20, 10] = 0.9
+    missed = np.zeros((80, 80), dtype=np.float32)
+    reacquired = np.zeros((80, 80), dtype=np.float32)
+    reacquired[55, 60] = 0.85
+
+    tracker.step(first, peaks=extract_top_peaks(first, threshold=0.1, top_k=3, suppression_radius=1))
+    tracker.step(missed, peaks=[])
+    out = tracker.step(reacquired, peaks=extract_top_peaks(reacquired, threshold=0.1, top_k=3, suppression_radius=1))
+
+    assert (out.x, out.y) == (60, 55)

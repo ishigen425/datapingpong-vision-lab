@@ -155,6 +155,8 @@ class BallBeliefHeatmapTracker:
         max_missed_frames: int = 100,
         output_threshold: float = 0.15,
         centroid_radius: int = 5,
+        reacquire_after_missed: bool = True,
+        reacquire_threshold: float | None = None,
     ) -> None:
         self.shape = shape
         self.gravity_y = float(gravity_y)
@@ -164,6 +166,8 @@ class BallBeliefHeatmapTracker:
         self.max_missed_frames = int(max_missed_frames)
         self.output_threshold = float(output_threshold)
         self.centroid_radius = int(centroid_radius)
+        self.reacquire_after_missed = bool(reacquire_after_missed)
+        self.reacquire_threshold = float(reacquire_threshold if reacquire_threshold is not None else output_threshold)
         self._belief: np.ndarray | None = None
         self._position: np.ndarray | None = None
         self._velocity = np.zeros(2, dtype=np.float64)
@@ -173,6 +177,18 @@ class BallBeliefHeatmapTracker:
     def step(self, heatmap: np.ndarray, *, peaks: list[HeatmapPeak]) -> TrackObservation:
         measurement = self._prepare_measurement(heatmap)
         measurement_peak = float(np.max(measurement)) if measurement.size else 0.0
+        reacquired_peak = self._select_reacquire_peak(peaks)
+        if self._belief is not None and reacquired_peak is not None:
+            posterior = self._normalize(measurement)
+            self._belief = posterior
+            self._reset_dynamics(np.asarray([float(reacquired_peak.x), float(reacquired_peak.y)], dtype=np.float64))
+            self._missed_frames = 0
+            return TrackObservation(
+                x=reacquired_peak.x,
+                y=reacquired_peak.y,
+                confidence=reacquired_peak.score,
+                candidate_count=len(peaks),
+            )
         if self._belief is None:
             if measurement_peak <= 0.0:
                 return TrackObservation(x=None, y=None, confidence=0.0, candidate_count=len(peaks))
@@ -209,6 +225,14 @@ class BallBeliefHeatmapTracker:
             )
         self._missed_frames = 0
         return TrackObservation(x=x_value, y=y_value, confidence=confidence, candidate_count=len(peaks))
+
+    def _select_reacquire_peak(self, peaks: list[HeatmapPeak]) -> HeatmapPeak | None:
+        if not self.reacquire_after_missed or self._missed_frames <= 0 or not peaks:
+            return None
+        selected = max(peaks, key=lambda peak: peak.score)
+        if selected.score < self.reacquire_threshold:
+            return None
+        return selected
 
     def _prepare_measurement(self, heatmap: np.ndarray) -> np.ndarray:
         measurement = np.asarray(heatmap, dtype=np.float32)
@@ -305,9 +329,7 @@ class BallBeliefHeatmapTracker:
 
     def _update_dynamics(self, position: np.ndarray, *, measurement_peak: float) -> None:
         if self._position is None:
-            self._position = position
-            self._velocity[:] = 0.0
-            self._acceleration[:] = np.asarray([0.0, self.gravity_y], dtype=np.float64)
+            self._reset_dynamics(position)
             return
         observed_velocity = position - self._position
         predicted_velocity = self._velocity + np.asarray([0.0, self.gravity_y], dtype=np.float64)
@@ -318,6 +340,11 @@ class BallBeliefHeatmapTracker:
         self._acceleration[1] = 0.6 * self._acceleration[1] + 0.4 * self.gravity_y
         self._velocity = new_velocity
         self._position = position
+
+    def _reset_dynamics(self, position: np.ndarray) -> None:
+        self._position = position
+        self._velocity[:] = 0.0
+        self._acceleration[:] = np.asarray([0.0, self.gravity_y], dtype=np.float64)
 
     @staticmethod
     def _normalize(heatmap: np.ndarray) -> np.ndarray:

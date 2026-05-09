@@ -4,6 +4,8 @@ Runs the imported legacy `UNet(27)` ball-tracking model on a video.
 
 The model consumes a 9-frame RGB window resized to `640x360`, stacked into 27 input channels. It now defaults to a belief-heatmap temporal decoder (`--decoder belief`) that keeps a 2D location belief internally, predicts it forward with motion and gravity priors, and corrects it with each new UNet heatmap instead of collapsing immediately to a raw argmax.
 
+When the belief decoder has missed the ball and UNet produces a new strong detection, it snaps the tracked state to that new peak by default. The JSON keeps both values: `x`/`y` are the temporal decoder output, while `unet_x`/`unet_y` are the single-frame UNet heatmap peak before temporal smoothing.
+
 ```bash
 docker compose run --rm app python tasks/detect_ball_legacy/run.py --max-frames 20
 ```
@@ -48,3 +50,4 @@ Useful decoder controls:
 - `--belief-gravity`: per-frame vertical acceleration prior for the belief decoder
 - `--belief-prior-blur`: diffusion strength applied after the belief state is moved forward
 - `--belief-measurement-floor`: minimum likelihood mixed into each frame so the belief can survive short misses
+- `--no-belief-reacquire-after-missed`: disables the snap-to-UNet behavior after missed frames
